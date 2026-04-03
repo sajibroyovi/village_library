@@ -61,7 +61,8 @@ function applyAction($conn, $actionType, $payload, $photoPath) {
 
     // Helper to resolve pending IDs inside payloads
     $resolveId = function($id) use ($conn) {
-        if (!$id || !is_string($id) || !str_starts_with($id, 'pending_')) return $id;
+        if (!$id || $id === '') return null;
+        if (!is_string($id) || !str_starts_with($id, 'pending_')) return $id;
         $pId = str_replace('pending_', '', $id);
         $stmt = $conn->prepare("SELECT target_id FROM pending_actions WHERE id=? AND status='approved' LIMIT 1");
         $stmt->execute([$pId]);
@@ -78,12 +79,14 @@ function applyAction($conn, $actionType, $payload, $photoPath) {
             return $conn->lastInsertId();
         case 'edit_family':
             $p = $payload;
+            $parentFamId = $resolveId($p['parent_family_id'] ?? '');
+            $originMemId = $resolveId($p['origin_member_id'] ?? '');
             if ($livePhoto) {
-                $stmt = $conn->prepare("UPDATE families SET house_owner_name=?, house_no=?, google_map_location=?, area=?, type_of_house=?, financial_condition=?, land=?, members_of_house=?, temple_details=?, owner_father_name=?, owner_mother_name=?, owner_mobile=?, photo_path=? WHERE id=?");
-                $stmt->execute([$p['owner_name'], $p['house_no'] ?? '', $p['google_map_location'] ?? '', $p['area'], $p['type_of_house'], $p['financial_condition'], $p['land'] ?? '', $p['members_of_house'] ?? '', $p['temple_details'] ?? '', $p['owner_father_name'] ?? '', $p['owner_mother_name'] ?? '', $p['owner_mobile'] ?? '', $livePhoto, $p['id']]);
+                $stmt = $conn->prepare("UPDATE families SET house_owner_name=?, house_no=?, google_map_location=?, area=?, type_of_house=?, financial_condition=?, land=?, members_of_house=?, temple_details=?, owner_father_name=?, owner_mother_name=?, owner_mobile=?, photo_path=?, parent_family_id=?, origin_member_id=? WHERE id=?");
+                $stmt->execute([$p['owner_name'], $p['house_no'] ?? '', $p['google_map_location'] ?? '', $p['area'], $p['type_of_house'], $p['financial_condition'], $p['land'] ?? '', $p['members_of_house'] ?? '', $p['temple_details'] ?? '', $p['owner_father_name'] ?? '', $p['owner_mother_name'] ?? '', $p['owner_mobile'] ?? '', $livePhoto, $parentFamId, $originMemId, $p['id']]);
             } else {
-                $stmt = $conn->prepare("UPDATE families SET house_owner_name=?, house_no=?, google_map_location=?, area=?, type_of_house=?, financial_condition=?, land=?, members_of_house=?, temple_details=?, owner_father_name=?, owner_mother_name=?, owner_mobile=? WHERE id=?");
-                $stmt->execute([$p['owner_name'], $p['house_no'] ?? '', $p['google_map_location'] ?? '', $p['area'], $p['type_of_house'], $p['financial_condition'], $p['land'] ?? '', $p['members_of_house'] ?? '', $p['temple_details'] ?? '', $p['owner_father_name'] ?? '', $p['owner_mother_name'] ?? '', $p['owner_mobile'] ?? '', $p['id']]);
+                $stmt = $conn->prepare("UPDATE families SET house_owner_name=?, house_no=?, google_map_location=?, area=?, type_of_house=?, financial_condition=?, land=?, members_of_house=?, temple_details=?, owner_father_name=?, owner_mother_name=?, owner_mobile=?, parent_family_id=?, origin_member_id=? WHERE id=?");
+                $stmt->execute([$p['owner_name'], $p['house_no'] ?? '', $p['google_map_location'] ?? '', $p['area'], $p['type_of_house'], $p['financial_condition'], $p['land'] ?? '', $p['members_of_house'] ?? '', $p['temple_details'] ?? '', $p['owner_father_name'] ?? '', $p['owner_mother_name'] ?? '', $p['owner_mobile'] ?? '', $parentFamId, $originMemId, $p['id']]);
             }
             break;
         case 'delete_family':

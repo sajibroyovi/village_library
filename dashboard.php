@@ -15,6 +15,7 @@ $username = $_SESSION['username'];
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard - Family Information Portal</title>
     <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
     <script src="assets/js/app.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
@@ -23,6 +24,7 @@ $username = $_SESSION['username'];
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
     <script>
         // Use a prefix for Tailwind to avoid conflicts with existing dashboard styles
         tailwind.config = {
@@ -57,10 +59,9 @@ $username = $_SESSION['username'];
             <nav class="sidebar-nav">
                 <a href="#" id="nav-home" class="nav-item active" onclick="switchMainView('home')">🏠 Village Portfolio</a>
                 <a href="#" id="nav-analytics" class="nav-item" onclick="switchMainView('analytics')">📊 Analytics</a>
+                <a href="#" id="nav-map" class="nav-item" onclick="switchMainView('map')">🗺️ Village Map</a>
+                <a href="#" id="nav-newsfeed" class="nav-item" onclick="switchMainView('newsfeed')">📰 Village Newsfeed</a>
                 <a href="#" id="nav-families" class="nav-item" onclick="switchMainView('families')">Families Directory</a>
-                <?php if ($role === 'super_admin' || $role === 'admin'): ?>
-                <a href="#" class="nav-item" onclick="openAddFamilyModal()">+ Add New Family</a>
-                <?php endif; ?>
                 <div style="margin: 1rem 0; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1rem;">
                     <h4 style="color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.5rem; padding: 0 1rem;">Data Export</h4>
                     <a href="#" class="nav-item" onclick="exportToExcel()">📊 Export to Excel</a>
@@ -147,6 +148,20 @@ $username = $_SESSION['username'];
                 </div>
             </div>
 
+            <!-- Families Directory Header + Filters Section -->
+            <div id="familiesDirectoryHeader" style="display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <div>
+                        <h2 style="margin: 0; font-size: 1.6rem; font-weight: 700;">🏘️ Families Directory</h2>
+                        <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted); margin-top: 0.2rem;">Browse all registered households in Shidhlajury.</p>
+                    </div>
+                    <?php if ($role === 'super_admin' || $role === 'admin'): ?>
+                    <button class="btn-primary" onclick="openAddFamilyModal()" style="width: auto; padding: 0.65rem 1.4rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.95rem;">
+                        <span style="font-size: 1.1rem;">+</span> Add New Family
+                    </button>
+                    <?php endif; ?>
+                </div>
+            </div>
             <!-- Filters Section -->
             <div class="filter-container" style="display: none;">
                 <div class="filter-group">
@@ -281,6 +296,55 @@ $username = $_SESSION['username'];
                         <h3 class="tw-text-lg tw-font-bold tw-text-indigo-900 tw-mb-4">Education Levels</h3>
                         <div class="tw-relative tw-h-64">
                             <canvas id="chartEdu"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Village Map View -->
+            <div id="mapView" style="display: none;">
+                <div class="tw-mb-6 tw-flex tw-items-center tw-justify-between">
+                    <div>
+                        <h2 class="tw-text-3xl tw-font-bold tw-text-indigo-900 tw-mb-1">🗺️ Interactive Village Map</h2>
+                        <p class="tw-text-indigo-500 tw-text-sm">Explore all registered households mapped across Shidhlajury.</p>
+                    </div>
+                    <div class="tw-flex tw-gap-3">
+                        <span class="tw-inline-flex tw-items-center tw-gap-1 tw-bg-indigo-50 tw-text-indigo-700 tw-text-xs tw-font-bold tw-px-3 tw-py-1 tw-rounded-full tw-border tw-border-indigo-200">🏠 Household with Location</span>
+                        <span class="tw-inline-flex tw-items-center tw-gap-1 tw-bg-amber-50 tw-text-amber-700 tw-text-xs tw-font-bold tw-px-3 tw-py-1 tw-rounded-full tw-border tw-border-amber-200">📍 Area Cluster</span>
+                    </div>
+                </div>
+                <div id="villageMap" style="height: 620px; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 30px rgba(79,70,229,0.15); border: 1px solid rgba(79,70,229,0.15);"></div>
+                <div class="tw-mt-4 tw-text-xs tw-text-indigo-400 tw-text-center">Pins represent registered households. Click any pin to view family details.</div>
+            </div>
+
+            <!-- Village Newsfeed View -->
+            <div id="newsfeedView" style="display: none;">
+                <div class="tw-mb-8">
+                    <h2 class="tw-text-3xl tw-font-bold tw-text-indigo-900 tw-mb-1">📰 Village Newsfeed</h2>
+                    <p class="tw-text-indigo-500 tw-text-sm">A living timeline of the Shidhlajury family registry.</p>
+                </div>
+                <div class="tw-grid tw-grid-cols-1 md:tw-grid-cols-3 tw-gap-8">
+                    <!-- Timeline Feed -->
+                    <div class="tw-col-span-2">
+                        <div id="newsfeedTimeline" class="tw-flex tw-flex-col tw-gap-0">
+                            <div class="tw-text-indigo-400 tw-text-center tw-py-8">Loading events...</div>
+                        </div>
+                    </div>
+                    <!-- Stats Sidebar -->
+                    <div class="tw-flex tw-flex-col tw-gap-4">
+                        <div class="tw-bg-gradient-to-br tw-from-indigo-600 tw-to-purple-600 tw-rounded-2xl tw-p-6 tw-text-white tw-shadow-lg">
+                            <div class="tw-text-sm tw-uppercase tw-tracking-widest tw-font-bold tw-opacity-80 tw-mb-4">Village at a Glance</div>
+                            <div class="tw-flex tw-flex-col tw-gap-3">
+                                <div class="tw-flex tw-justify-between tw-items-center"><span class="tw-opacity-80">Total Families</span><span class="tw-font-black tw-text-xl" id="nf-total-fam">-</span></div>
+                                <div class="tw-border-t tw-border-white/20"></div>
+                                <div class="tw-flex tw-justify-between tw-items-center"><span class="tw-opacity-80">Total People</span><span class="tw-font-black tw-text-xl" id="nf-total-mem">-</span></div>
+                                <div class="tw-border-t tw-border-white/20"></div>
+                                <div class="tw-flex tw-justify-between tw-items-center"><span class="tw-opacity-80">Newest Household</span><span class="tw-font-black tw-text-sm tw-text-right tw-max-w-[120px]" id="nf-newest">-</span></div>
+                            </div>
+                        </div>
+                        <div class="tw-bg-white tw-border tw-border-indigo-100 tw-rounded-2xl tw-p-5 tw-shadow-sm">
+                            <div class="tw-text-xs tw-font-bold tw-text-indigo-400 tw-uppercase tw-tracking-widest tw-mb-4">Areas in Registry</div>
+                            <div id="nf-areas" class="tw-flex tw-flex-col tw-gap-2"></div>
                         </div>
                     </div>
                 </div>
@@ -1569,17 +1633,17 @@ $username = $_SESSION['username'];
                 document.getElementById('addFamilyForm').reset();
                 document.getElementById('family_photo_preview').style.display = 'none';
                 document.getElementById('origin_member_group').style.display = 'none';
-                
+                loadFamilies();
                 if (res.status === 'pending') {
-                    const msg = action === 'update_pending_action' ? "✅ Request Updated\n\nYour changes to the pending request have been saved and are awaiting Super Admin approval." : "✅ Request Submitted\n\nYour change has been sent to the Super Admin for approval. It will appear in the directory once approved.";
-                    alert(msg);
-                    loadFamilies();
+                    const msg = action === 'update_pending_action'
+                        ? '✏️ Changes saved and sent to Super Admin for approval.'
+                        : '✅ Family request submitted! Awaiting Super Admin approval.';
+                    showToast(msg, 'info');
                 } else {
-                    loadFamilies();
-                    showToast(res.message);
+                    showToast(res.message || '✅ Family saved successfully!', 'success');
                 }
             } else {
-                alert(res.message);
+                showToast('❌ ' + (res.message || 'Something went wrong.'), 'error');
             }
         });
 
@@ -1656,14 +1720,14 @@ $username = $_SESSION['username'];
                 document.getElementById('addMemberForm').reset();
                 document.getElementById('member_photo_preview').style.display = 'none';
                 document.getElementById('sibling_member_group').style.display = 'none';
-                
+                loadFamilies();
                 if (res.status === 'pending') {
-                    const msg = action === 'update_pending_action' ? "✅ Member Request Updated\n\nChanges saved and awaiting Super Admin approval." : "✅ Member Request Submitted\n\nSent to Super Admin for approval.";
-                    alert(msg);
-                    loadFamilies();
+                    const msg = action === 'update_pending_action'
+                        ? '✏️ Member changes saved and sent for approval.'
+                        : '✅ Member request submitted! Awaiting Super Admin approval.';
+                    showToast(msg, 'info');
                 } else {
-                    loadFamilies();
-                    showToast(res.message);
+                    showToast(res.message || '✅ Member saved successfully!', 'success');
                 }
             } else {
                 alert(res.message);
@@ -2040,8 +2104,12 @@ $username = $_SESSION['username'];
 
         function switchMainView(view) {
             currentView = view;
+            localStorage.setItem('shidhlajury_last_view', view);
             const homeView       = document.getElementById('homePortfolioWrapper');
             const analyticsView  = document.getElementById('analyticsView');
+            const mapView        = document.getElementById('mapView');
+            const newsfeedView   = document.getElementById('newsfeedView');
+            const familiesHeader = document.getElementById('familiesDirectoryHeader');
             const familiesView   = document.getElementById('familiesGrid');
             const filtersSection = document.querySelector('.filter-container');
             const usersView      = document.getElementById('userManagementView');
@@ -2049,20 +2117,27 @@ $username = $_SESSION['username'];
             
             const navHome        = document.getElementById('nav-home');
             const navAnalytics   = document.getElementById('nav-analytics');
+            const navMap         = document.getElementById('nav-map');
+            const navNewsfeed    = document.getElementById('nav-newsfeed');
             const navFamilies    = document.getElementById('nav-families');
             const navUsers       = document.getElementById('nav-users');
             const navApprovals   = document.getElementById('nav-approvals');
 
             // hide all
-            if (homeView)      homeView.style.display       = 'none';
-            if (analyticsView) analyticsView.style.display  = 'none';
-            if (familiesView)  familiesView.style.display   = 'none';
-            if (filtersSection) filtersSection.style.display = 'none';
-            if (usersView)     usersView.style.display     = 'none';
-            if (approvalsView) approvalsView.style.display = 'none';
+            if (homeView)       homeView.style.display        = 'none';
+            if (analyticsView)  analyticsView.style.display   = 'none';
+            if (mapView)        mapView.style.display         = 'none';
+            if (newsfeedView)   newsfeedView.style.display    = 'none';
+            if (familiesHeader) familiesHeader.style.display  = 'none';
+            if (familiesView)   familiesView.style.display    = 'none';
+            if (filtersSection) filtersSection.style.display  = 'none';
+            if (usersView)      usersView.style.display       = 'none';
+            if (approvalsView)  approvalsView.style.display   = 'none';
             
             if (navHome)      navHome.classList.remove('active');
             if (navAnalytics) navAnalytics.classList.remove('active');
+            if (navMap)       navMap.classList.remove('active');
+            if (navNewsfeed)  navNewsfeed.classList.remove('active');
             if (navFamilies)  navFamilies.classList.remove('active');
             if (navUsers)     navUsers.classList.remove('active');
             if (navApprovals) navApprovals.classList.remove('active');
@@ -2078,11 +2153,21 @@ $username = $_SESSION['username'];
                 if (navAnalytics) navAnalytics.classList.add('active');
                 if (globalFamiliesData.length === 0) loadFamilies();
                 setTimeout(() => renderAnalyticsCharts(), 100);
+            } else if (view === 'map') {
+                if (mapView) mapView.style.display = 'block';
+                if (navMap) navMap.classList.add('active');
+                if (globalFamiliesData.length === 0) loadFamilies();
+                setTimeout(() => renderVillageMap(), 200);
+            } else if (view === 'newsfeed') {
+                if (newsfeedView) newsfeedView.style.display = 'block';
+                if (navNewsfeed) navNewsfeed.classList.add('active');
+                if (globalFamiliesData.length === 0) loadFamilies();
+                setTimeout(() => renderNewsfeed(), 100);
             } else if (view === 'families') {
-                if (familiesView) familiesView.style.display   = 'grid';
+                if (familiesHeader) familiesHeader.style.display = 'block';
+                if (familiesView)   familiesView.style.display   = 'grid';
                 if (filtersSection) filtersSection.style.display = 'flex';
-                if (navFamilies) navFamilies.classList.add('active');
-                // Ensure data is loaded if switched directly here
+                if (navFamilies)    navFamilies.classList.add('active');
                 if (globalFamiliesData.length === 0) loadFamilies();
             } else if (view === 'users') {
                 usersView.style.display = 'block';
@@ -2188,7 +2273,7 @@ $username = $_SESSION['username'];
         function showToast(message, type = 'success') {
             const toast = document.createElement('div');
             toast.className = 'toast-notification ' + type;
-            toast.textContent = message;
+            toast.innerHTML = message; // Use innerHTML to support icons/emojis
             document.body.appendChild(toast);
             setTimeout(() => toast.classList.add('visible'), 50);
             setTimeout(() => {
@@ -2236,8 +2321,8 @@ $username = $_SESSION['username'];
                     <td style="color: var(--text-muted); font-size: 0.8rem;">${date}</td>
                     <td style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
                         <button class="btn-outline" style="padding: 0.4rem 0.8rem; font-size: 0.75rem;" onclick='viewPendingDetails(${JSON.stringify(a).replace(/'/g, "&#39;")})'>🔍 View Data</button>
-                        <button class="btn-primary" style="padding: 0.4rem 1rem; font-size: 0.8rem;" onclick="reviewAction(${a.id}, 'approved', '')">✅ Approve</button>
-                        <button class="btn-outline" style="padding: 0.4rem 1rem; font-size: 0.8rem; border-color: var(--secondary); color: var(--secondary);" onclick="promptReject(${a.id})">❌ Reject</button>
+                        <button class="btn-primary" style="padding: 0.4rem 1rem; font-size: 0.8rem;" onclick="reviewAction(${a.id}, 'approved', '', '${detail.replace(/'/g, "\\'")}')">✅ Approve</button>
+                        <button class="btn-outline" style="padding: 0.4rem 1rem; font-size: 0.8rem; border-color: var(--secondary); color: var(--secondary);" onclick="promptReject(${a.id}, '${detail.replace(/'/g, "\\'")}')">❌ Reject</button>
                     </td>
                 `;
                 tbody.appendChild(tr);
@@ -2295,38 +2380,47 @@ $username = $_SESSION['username'];
             // Re-bind buttons
             approveBtn.onclick = () => {
                 closeModal('pendingDetailsModal');
-                reviewAction(action.id, 'approved', '');
+                const detail = payload.name || payload.owner_name || (action.target_id ? `ID: ${action.target_id}` : '—');
+                reviewAction(action.id, 'approved', '', detail);
             };
             rejectBtn.onclick = () => {
                 closeModal('pendingDetailsModal');
-                promptReject(action.id);
+                const detail = payload.name || payload.owner_name || (action.target_id ? `ID: ${action.target_id}` : '—');
+                promptReject(action.id, detail);
             };
             
             document.getElementById('pendingDetailsModal').classList.add('active');
         }
 
-        async function reviewAction(id, decision, note) {
-            showToast(`${decision === 'approved' ? 'Approving' : 'Rejecting'} action...`, 'info');
-            const formData = new FormData();
-            formData.append('action', 'review_action');
-            formData.append('id', id);
-            formData.append('decision', decision);
-            formData.append('note', note);
-            const res = await apiCall('review_action', formData);
-            if (res.status === 'success') {
-                showToast(`Action ${decision} successfully.`, decision === 'approved' ? 'success' : 'info');
-                loadPendingActions();
-                loadFamilies(); 
-                if (window.renderFamilies) window.renderFamilies(); // Refresh grid
-            } else {
-                showToast(res.message || 'Error reviewing action', 'error');
+        async function reviewAction(id, decision, note, detail = '') {
+            const label = detail ? `'${detail}'` : 'Record';
+            showToast(`${decision === 'approved' ? '✅' : '❌'} ${decision === 'approved' ? 'Approving' : 'Rejecting'} ${label}...`, 'info');
+            try {
+                const formData = new FormData();
+                formData.append('action', 'review_action');
+                formData.append('id', id);
+                formData.append('decision', decision);
+                formData.append('note', note);
+                const res = await apiCall('review_action', formData);
+                if (res.status === 'success') {
+                    showToast(`✅ ${label} ${decision} successfully.`, decision === 'approved' ? 'success' : 'info');
+                    loadPendingActions();
+                    loadFamilies(); 
+                    if (window.renderFamilies) window.renderFamilies(); // Refresh grid
+                    loadNotifications(); // Refresh bell
+                } else {
+                    showToast('❌ ' + (res.message || `Error reviewing ${label}`), 'error');
+                }
+            } catch (e) {
+                showToast(`❌ Network error during ${decision}.`, 'error');
+                console.error(e);
             }
         }
 
-        function promptReject(id) {
-            const note = prompt('Optional: Enter a reason for rejection (or leave blank):');
+        function promptReject(id, detail = '') {
+            const note = prompt(`Enter a reason for rejecting ${detail || 'this record'} (optional):`);
             if (note === null) return; 
-            reviewAction(id, 'rejected', note || '');
+            reviewAction(id, 'rejected', note || '', detail);
         }
 
         function updatePendingBadge(count) {
@@ -2415,30 +2509,67 @@ $username = $_SESSION['username'];
 
         // ── Notification Logic ────────────────────────
         async function loadNotifications() {
-            const res = await apiCall('get_notifications');
-            if (res.status === 'success') {
-                const list = document.getElementById('notif-list');
-                const badge = document.getElementById('notif-badge');
-                if (!list || !badge) return;
-                
-                if (res.unread_count > 0) {
-                    badge.textContent = res.unread_count;
-                    badge.style.display = 'flex';
-                } else {
-                    badge.style.display = 'none';
-                }
+            try {
+                // Fetch in parallel for speed
+                const [nRes, pRes] = await Promise.all([
+                    apiCall('get_notifications'),
+                    <?php echo ($role === 'super_admin' ? "apiCall('get_pending_count')" : "Promise.resolve({count: 0})"); ?>
+                ]);
 
-                if (res.notifications.length === 0) {
-                    list.innerHTML = '<div style="padding: 1rem; text-align: center; color: var(--text-muted);">No notifications</div>';
-                    return;
-                }
+                let pendingCount = pRes.count || 0;
+                updatePendingBadge(pendingCount);
 
-                list.innerHTML = res.notifications.map(n => `
-                    <div class="notif-item ${n.is_read ? '' : 'unread'}">
-                        <div style="margin-bottom: 0.3rem;">${n.message}</div>
-                        <div style="font-size: 0.7rem; color: var(--text-muted);">${new Date(n.created_at).toLocaleString()}</div>
-                    </div>
-                `).join('');
+                if (nRes.status === 'success') {
+                    const list = document.getElementById('notif-list');
+                    const badge = document.getElementById('notif-badge');
+                    if (!list || !badge) return;
+                    
+                    const unreadNotifs = nRes.unread_count || 0;
+                    const totalAlerts = unreadNotifs + pendingCount;
+                    
+                    if (totalAlerts > 0) {
+                        badge.textContent = totalAlerts;
+                        badge.style.display = 'flex';
+                    } else {
+                        badge.style.display = 'none';
+                    }
+
+                    let html = '';
+                    
+                    // Prioritize Pending Approvals at the top of the list
+                    if (pendingCount > 0) {
+                        html += `
+                            <div class="notif-item unread" style="background: rgba(79, 70, 229, 0.08); border-left: 4px solid #4f46e5; cursor: pointer; transition: all 0.2s;" onclick="switchMainView('approvals')">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 4px;">
+                                    <strong style="color: #4338ca; font-size: 0.8rem; display:flex; align-items:center; gap: 6px;">
+                                        <span>🔔</span> PENDING APPROVALS
+                                    </strong>
+                                    <span style="background:#4f46e5; color:white; font-size:0.7rem; font-weight:800; padding: 1px 8px; border-radius:99px;">${pendingCount}</span>
+                                </div>
+                                <div style="font-size: 0.85rem; color: #1e1b4b; line-height: 1.4;">There are ${pendingCount} actions waiting for super admin review.</div>
+                                <div style="font-size: 0.7rem; color: #6366f1; margin-top: 6px; font-weight: 600;">Click to open Approval Queue ➔</div>
+                            </div>
+                        `;
+                    }
+
+                    if (nRes.notifications.length === 0 && pendingCount === 0) {
+                        list.innerHTML = '<div style="padding: 2rem 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">✨ All caught up! No new notifications.</div>';
+                        return;
+                    }
+
+                    html += nRes.notifications.map(n => `
+                        <div class="notif-item ${n.is_read ? '' : 'unread'}">
+                            <div style="margin-bottom: 4px; font-size: 0.88rem; line-height: 1.5; color: var(--text-main);">${n.message}</div>
+                            <div style="font-size: 0.68rem; color: var(--text-muted); display:flex; align-items:center; gap: 4px;">
+                                <span>📅</span> ${new Date(n.created_at).toLocaleString()}
+                            </div>
+                        </div>
+                    `).join('');
+                    
+                    list.innerHTML = html;
+                }
+            } catch(e) { 
+                console.error("Critical: Notification sync failed", e); 
             }
         }
 
@@ -2568,9 +2699,222 @@ $username = $_SESSION['username'];
             createChart('chartEdu', 'bar', sortedEdu, colors[3], 'Members');
         }
 
+        // ── Village Map Module ────────────────────────────
+        let leafletMap = null;
+        let mapMarkers = [];
+
+        // Approximate GPS anchor coordinates for each village area
+        const AREA_COORDS = {
+            'purbo para':   [23.4820, 90.3870],
+            'uttor para':   [23.4845, 90.3880],
+            'dokhin para':  [23.4795, 90.3875],
+            'roy bari':     [23.4830, 90.3855],
+            'boshu para':   [23.4810, 90.3900],
+            'babu para':    [23.4855, 90.3860],
+            'porchim para': [23.4800, 90.3840],
+        };
+        const VILLAGE_CENTER = [23.4825, 90.3872];
+
+        function parseLatLng(mapUrl) {
+            if (!mapUrl) return null;
+            // Try to extract coordinates from Google Maps URL formats
+            const regQ   = /[?&]q=([-\d.]+),([-\d.]+)/;
+            const regAt  = /@([-\d.]+),([-\d.]+)/;
+            const regLL  = /ll=([-\d.]+),([-\d.]+)/;
+            for (const reg of [regQ, regAt, regLL]) {
+                const m = mapUrl.match(reg);
+                if (m) return [parseFloat(m[1]), parseFloat(m[2])];
+            }
+            return null;
+        }
+
+        function renderVillageMap() {
+            const container = document.getElementById('villageMap');
+            if (!container) return;
+
+            // Destroy and re-init if already exists (prevents grey tile bug)
+            if (leafletMap) {
+                leafletMap.remove();
+                leafletMap = null;
+            }
+
+            leafletMap = L.map('villageMap', { zoomControl: true }).setView(VILLAGE_CENTER, 15);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                maxZoom: 19
+            }).addTo(leafletMap);
+
+            // Custom indigo pin icon
+            const houseIcon = L.divIcon({
+                className: '',
+                html: `<div style="background:#4f46e5;width:34px;height:34px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:3px solid #fff;box-shadow:0 2px 8px rgba(79,70,229,0.5);">
+                         <span style="display:block;transform:rotate(45deg);text-align:center;line-height:28px;font-size:14px;">🏠</span>
+                       </div>`,
+                iconSize: [34, 34],
+                iconAnchor: [17, 34],
+                popupAnchor: [0, -36]
+            });
+
+            let placed = 0;
+
+            globalFamiliesData.forEach(f => {
+                const coords = parseLatLng(f.google_map_location);
+                
+                if (coords) {
+                    // Exact GPS pin
+                    const memberCount = f.members?.length || 0;
+                    const popup = `
+                        <div style="font-family:system-ui;min-width:200px;">
+                            <div style="font-size:1rem;font-weight:800;color:#312e81;margin-bottom:4px;">${f.house_owner_name}</div>
+                            <div style="font-size:0.78rem;color:#6366f1;margin-bottom:8px;">📍 ${f.area || 'Unknown Area'} · House ${f.house_no || 'N/A'}</div>
+                            <div style="font-size:0.78rem;color:#475569;">👥 ${memberCount} registered member${memberCount !== 1 ? 's' : ''}</div>
+                            <div style="font-size:0.78rem;color:#475569;">💰 ${f.financial_condition || 'N/A'}</div>
+                            <a href="${f.google_map_location}" target="_blank" style="display:inline-block;margin-top:8px;font-size:0.75rem;background:#4f46e5;color:#fff;padding:3px 10px;border-radius:99px;text-decoration:none;">Open in Maps ↗</a>
+                        </div>`;
+                    L.marker(coords, { icon: houseIcon }).addTo(leafletMap).bindPopup(popup);
+                    placed++;
+                } else {
+                    // Area-based cluster with slight random offset
+                    const areaKey = (f.area || '').toLowerCase();
+                    const base = AREA_COORDS[areaKey] || VILLAGE_CENTER;
+                    const jitter = [
+                        base[0] + (Math.random() - 0.5) * 0.002,
+                        base[1] + (Math.random() - 0.5) * 0.002
+                    ];
+                    const memberCount = f.members?.length || 0;
+                    const popup = `
+                        <div style="font-family:system-ui;min-width:180px;">
+                            <div style="font-size:0.95rem;font-weight:800;color:#312e81;margin-bottom:4px;">${f.house_owner_name}</div>
+                            <div style="font-size:0.75rem;color:#6366f1;margin-bottom:6px;">📍 ${f.area || 'Shidhlajury'}</div>
+                            <div style="font-size:0.75rem;color:#94a3b8;font-style:italic;">Exact GPS not recorded</div>
+                            <div style="font-size:0.75rem;color:#475569;margin-top:4px;">👥 ${memberCount} member${memberCount !== 1 ? 's' : ''}</div>
+                        </div>`;
+                    L.circleMarker(jitter, {
+                        radius: 9, fillColor: '#a5b4fc', color: '#4f46e5',
+                        weight: 2, opacity: 1, fillOpacity: 0.7
+                    }).addTo(leafletMap).bindPopup(popup);
+                }
+            });
+
+            // Fit map to all markers if any with GPS
+            if (placed > 0) leafletMap.fitBounds(leafletMap.getBounds(), { padding: [30, 30] });
+        }
+
+        // ── Village Newsfeed Module ───────────────────────
+        function renderNewsfeed() {
+            if (globalFamiliesData.length === 0) return;
+
+            const timeline = document.getElementById('newsfeedTimeline');
+            const nfFam    = document.getElementById('nf-total-fam');
+            const nfMem    = document.getElementById('nf-total-mem');
+            const nfNewest = document.getElementById('nf-newest');
+            const nfAreas  = document.getElementById('nf-areas');
+
+            if (!timeline) return;
+
+            const allMembers = globalFamiliesData.flatMap(f => (f.members || []).map(m => ({ ...m, family: f })));
+            const totalFam = globalFamiliesData.length;
+            const totalMem = allMembers.length;
+
+            if (nfFam)    nfFam.innerText    = totalFam;
+            if (nfMem)    nfMem.innerText    = totalMem;
+            if (nfNewest) nfNewest.innerText = globalFamiliesData[totalFam - 1]?.house_owner_name || 'N/A';
+
+            // Area breakdown
+            const areaCount = {};
+            globalFamiliesData.forEach(f => {
+                const area = f.area || 'Unknown';
+                areaCount[area] = (areaCount[area] || 0) + 1;
+            });
+            if (nfAreas) {
+                nfAreas.innerHTML = Object.entries(areaCount)
+                    .sort(([,a],[,b]) => b - a)
+                    .map(([area, count]) => {
+                        const pct = Math.round((count / totalFam) * 100);
+                        return `<div>
+                            <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+                                <span style="font-size:0.8rem;color:#475569;text-transform:capitalize;">${area}</span>
+                                <span style="font-size:0.8rem;font-weight:700;color:#4f46e5;">${count}</span>
+                            </div>
+                            <div style="height:5px;background:#e0e7ff;border-radius:99px;overflow:hidden;">
+                                <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#6366f1,#a855f7);border-radius:99px;"></div>
+                            </div>
+                        </div>`;
+                    }).join('');
+            }
+
+            // Build auto-generated events timeline
+            const events = [];
+
+            // One event per family registration
+            globalFamiliesData.forEach((f, i) => {
+                events.push({
+                    icon: '🏠',
+                    color: '#4f46e5',
+                    title: `New Household Registered`,
+                    desc: `<strong>${f.house_owner_name}</strong> family of ${f.area || 'Shidhlajury'} was added to the registry.`,
+                    sub:  `House No. ${f.house_no || 'N/A'} · ${f.financial_condition || ''}`
+                });
+            });
+
+            // Highlight largest families
+            const bigFamilies = [...globalFamiliesData]
+                .filter(f => (f.members?.length || 0) >= 5)
+                .sort((a, b) => (b.members?.length || 0) - (a.members?.length || 0))
+                .slice(0, 3);
+            bigFamilies.forEach(f => {
+                events.unshift({
+                    icon: '👨‍👩‍👧‍👦',
+                    color: '#7c3aed',
+                    title: 'Largest Household',
+                    desc: `<strong>${f.house_owner_name}</strong>'s family has <strong>${f.members.length} members</strong> — one of the largest in the village.`,
+                    sub: f.area || ''
+                });
+            });
+
+            // Blood donor highlights
+            const donors = allMembers.filter(m => m.blood_group && m.blood_group.trim());
+            if (donors.length > 0) {
+                events.unshift({
+                    icon: '🩸',
+                    color: '#e11d48',
+                    title: `${donors.length} Registered Blood Group Records`,
+                    desc: `The village registry includes <strong>${donors.length} members</strong> with known blood groups, ready for emergency coordination.`,
+                    sub: [...new Set(donors.map(d => d.blood_group))].join(' · ')
+                });
+            }
+
+            // Summary headline
+            events.unshift({
+                icon: '📜',
+                color: '#059669',
+                title: 'Village Registry Milestone',
+                desc: `Shidhlajury's digital family archive now holds <strong>${totalFam} registered households</strong> with <strong>${totalMem} documented ancestors</strong>.`,
+                sub: 'Shidhlajury Heritage Portal'
+            });
+
+            // Render timeline
+            timeline.innerHTML = events.slice(0, 20).map((ev, i) => `
+                <div style="display:flex;gap:16px;padding-bottom:24px;position:relative;">
+                    <div style="display:flex;flex-direction:column;align-items:center;min-width:40px;">
+                        <div style="width:40px;height:40px;background:${ev.color}18;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.2rem;border:2px solid ${ev.color}30;z-index:1;">
+                            ${ev.icon}
+                        </div>
+                        ${i < events.slice(0,20).length - 1 ? `<div style="flex:1;width:2px;background:linear-gradient(to bottom, ${ev.color}30, transparent);margin-top:4px;"></div>` : ''}
+                    </div>
+                    <div style="background:white;border:1px solid #e0e7ff;border-radius:12px;padding:14px 16px;flex:1;box-shadow:0 1px 4px rgba(99,102,241,0.06);">
+                        <div style="font-size:0.7rem;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:${ev.color};margin-bottom:4px;">${ev.title}</div>
+                        <div style="font-size:0.88rem;color:#1e1b4b;line-height:1.5;">${ev.desc}</div>
+                        ${ev.sub ? `<div style="font-size:0.72rem;color:#94a3b8;margin-top:6px;">${ev.sub}</div>` : ''}
+                    </div>
+                </div>`).join('');
+        }
+
         // Initialize (Restored to standard script block for immediate execution)
         window.addEventListener('DOMContentLoaded', () => {
-            switchMainView('home');
+            const lastView = localStorage.getItem('shidhlajury_last_view') || 'home';
+            switchMainView(lastView);
             loadFamilies();
             startPolling();
         });
