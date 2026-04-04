@@ -52,6 +52,7 @@ $username = $_SESSION['username'];
     </script>
 </head>
 <body>
+    <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
     <div class="dashboard-layout">
         <!-- Sidebar -->
         <aside class="sidebar">
@@ -81,12 +82,14 @@ $username = $_SESSION['username'];
         <!-- Main Content -->
         <main class="main-content">
             <header class="header">
-                <div>
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <div class="menu-toggle" onclick="toggleSidebar()">☰</div>
                     <h1 style="margin:0; font-size: 1.8rem; font-weight: 600;">Welcome, <?php echo htmlspecialchars($username); ?></h1>
                 </div>
                 <div class="user-profile" style="display: flex; align-items: center; gap: 1.5rem;">
                     <div class="search-container" style="flex: 1; max-width: 400px; position: relative;">
-                        <input type="text" id="globalSearch" class="form-control" placeholder="🔍 Search Family, Name, Mobile, Area..." style="margin-bottom: 0; padding-left: 2.5rem; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1);">
+                        <input type="text" id="globalSearch" class="form-control" autocomplete="off" placeholder="🔍 Search Family, Name, Mobile, Area..." oninput="handleGlobalSearch(this.value)" style="margin-bottom: 0; padding-left: 2.5rem; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1);">
+                        <div id="searchDropdown" class="search-results-dropdown"></div>
                     </div>
                     
                     <div class="notification-wrapper" onclick="toggleNotifications()">
@@ -129,7 +132,7 @@ $username = $_SESSION['username'];
                         <span class="tw-absolute -tw-bottom-8 -tw-right-4 tw-text-6xl tw-text-white/20 tw-font-serif">"</span>
                     </div>
 
-                    <div class="tw-flex tw-justify-center tw-gap-8 tw-mb-10">
+                    <div class="tw-flex tw-justify-center tw-gap-8 tw-mb-10 stats-row">
                         <div class="tw-text-center">
                             <div class="tw-text-4xl tw-font-bold tw-text-indigo-300 tw-drop-shadow" id="statFamiliesCounter">...</div>
                             <div class="tw-text-sm tw-text-indigo-100 tw-uppercase tw-tracking-wider tw-mt-1">Registered Families</div>
@@ -824,6 +827,7 @@ $username = $_SESSION['username'];
         let currentMemberView = 'list';
 
         async function logout() {
+            localStorage.removeItem('shidhlajury_last_view');
             await authCall('logout');
             window.location.href = 'index.php';
         }
@@ -842,12 +846,26 @@ $username = $_SESSION['username'];
 
         function populateParentFamilies(selectedId = '', excludeId = null) {
             const select = document.getElementById('parent_family_id');
+            if (!select) return;
             let html = '<option value="">🏠 No Parent Family (New Root Household)</option>';
+            
+            // Live Families
             globalFamiliesData.forEach(f => {
                 if (f.id != excludeId) {
                     html += `<option value="${f.id}" ${f.id == selectedId ? 'selected' : ''}>${f.house_owner_name} (${f.area})</option>`;
                 }
             });
+
+            // Pending Families (Current Admin's additions)
+            if (userRole === 'admin' && globalPendingData) {
+                globalPendingData.forEach(p => {
+                    if (p.action_type === 'add_family' && p.status === 'pending') {
+                        const payload = JSON.parse(p.payload);
+                        const id = `pending_${p.id}`;
+                        html += `<option value="${id}" ${id == selectedId ? 'selected' : ''} style="font-style: italic; color: #818cf8;">${payload.owner_name} 🕒 (Pending Approval)</option>`;
+                    }
+                });
+            }
             select.innerHTML = html;
         }
 
@@ -855,15 +873,54 @@ $username = $_SESSION['username'];
             const group = document.getElementById('origin_member_group');
             const select = document.getElementById('origin_member_id');
             if (!familyId) { group.style.display = 'none'; return; }
-            const family = globalFamiliesData.find(f => f.id == familyId);
-            if (family && family.members) {
-                let html = '<option value="">Select Member</option>';
-                family.members.forEach(m => {
-                    html += `<option value="${m.id}" ${m.id == selectedMemberId ? 'selected' : ''}>${m.name} (${m.relation_to_owner})</option>`;
+            
+            let html = '<option value="">Select Member</option>';
+            let found = false;
+
+            // Case 1: Existing Live Family
+            const liveFamily = globalFamiliesData.find(f => f.id == familyId);
+            if (liveFamily) {
+                found = true;
+                if (liveFamily.members) {
+                    liveFamily.members.forEach(m => {
+                        html += `<option value="${m.id}" ${m.id == selectedMemberId ? 'selected' : ''}>${m.name} (${m.relation_to_owner})</option>`;
+                    });
+                }
+            }
+
+            // Case 2: Pending Family (Admin's addition)
+            if (!liveFamily && familyId.toString().startsWith('pending_')) {
+                const actionId = familyId.toString().replace('pending_', '');
+                const action = globalPendingData.find(a => a.id == actionId);
+                if (action) {
+                    found = true;
+                    const payload = JSON.parse(action.payload);
+                    const ownerId = `pending_owner_${action.id}`;
+                    html += `<option value="${ownerId}" ${ownerId == selectedMemberId ? 'selected' : ''} style="font-style: italic;">${payload.owner_name} (🕒 Initial Owner)</option>`;
+                }
+            }
+
+            // Case 3: Also check for pending ADD_MEMBER actions for this family
+            if (userRole === 'admin' && globalPendingData) {
+                globalPendingData.forEach(p => {
+                    if (p.action_type === 'add_member' && p.status === 'pending') {
+                        const payload = JSON.parse(p.payload);
+                        // Convert both to string for robust comparison (handles 'pending_' prefix)
+                        if (payload.family_id.toString() === familyId.toString()) {
+                            found = true;
+                            const mid = `pending_${p.id}`;
+                            html += `<option value="${mid}" ${mid == selectedMemberId ? 'selected' : ''} style="font-size:0.8rem; color:#818cf8;">${payload.name} 🕒 (Pending Member)</option>`;
+                        }
+                    }
                 });
+            }
+
+            if (found) {
                 select.innerHTML = html;
                 group.style.display = 'block';
-            } else { group.style.display = 'none'; }
+            } else {
+                group.style.display = 'none';
+            }
         }
 
         // Universal Toggle Helper
@@ -1009,17 +1066,6 @@ $username = $_SESSION['username'];
         }
 
         function populateParentDropdown(familyId, excludeMemberId = null) {
-            let family;
-            if (familyId.toString().startsWith('pending_')) {
-                const pId = familyId.toString().replace('pending_', '');
-                const action = globalPendingData.find(a => a.id == pId);
-                if (action) {
-                    const payload = JSON.parse(action.payload);
-                    family = { members: [] }; // New families have no live members to link yet
-                }
-            } else {
-                family = globalFamiliesData.find(f => f.id == familyId);
-            }
             const parentSelect = document.getElementById('parent_member_id');
             const spouseSelect = document.getElementById('spouse_member_id');
             const siblingSelect = document.getElementById('sibling_member_id');
@@ -1028,19 +1074,74 @@ $username = $_SESSION['username'];
             parentSelect.innerHTML = options;
             spouseSelect.innerHTML = options;
             siblingSelect.innerHTML = options;
-            
-            if (family && family.members) {
-                family.members.forEach(m => {
-                    if (m.id != excludeMemberId) {
-                        const option = document.createElement('option');
-                        option.value = m.id;
-                        option.textContent = `${m.name} ${m.nick_name ? `(${m.nick_name})` : ''} - ${m.relation_to_owner}`;
-                        parentSelect.appendChild(option.cloneNode(true));
-                        spouseSelect.appendChild(option.cloneNode(true));
-                        siblingSelect.appendChild(option);
+
+            let members = [];
+
+            // 1. Live Members from globalFamiliesData
+            const liveFamily = globalFamiliesData.find(f => f.id == familyId);
+            if (liveFamily && liveFamily.members) {
+                liveFamily.members.forEach(m => {
+                    members.push({
+                        id: m.id,
+                        name: m.name,
+                        nick_name: m.nick_name,
+                        relation: m.relation_to_owner,
+                        is_pending: false
+                    });
+                });
+            }
+
+            // 2. Pending Members from globalPendingData (add_member)
+            if (userRole === 'admin' && globalPendingData) {
+                globalPendingData.forEach(p => {
+                    if (p.action_type === 'add_member' && p.status === 'pending') {
+                        const payload = JSON.parse(p.payload);
+                        if (payload.family_id == familyId) {
+                            members.push({
+                                id: `pending_mem_${p.id}`,
+                                name: payload.name,
+                                nick_name: payload.nick_name,
+                                relation: payload.relation_to_owner,
+                                is_pending: true
+                            });
+                        }
                     }
                 });
             }
+
+            // 3. Special Case: If Family is Pending, add its Initial Owner
+            if (familyId.toString().startsWith('pending_')) {
+                const actionId = familyId.toString().replace('pending_', '');
+                const action = globalPendingData.find(a => a.id == actionId);
+                if (action && action.action_type === 'add_family') {
+                    const payload = JSON.parse(action.payload);
+                    members.push({
+                        id: `pending_owner_${action.id}`,
+                        name: payload.owner_name,
+                        nick_name: '',
+                        relation: 'Self (Owner)',
+                        is_pending: true
+                    });
+                }
+            }
+
+            // Populate the Dropdowns
+            members.forEach(m => {
+                if (m.id != excludeMemberId) {
+                    const option = document.createElement('option');
+                    option.value = m.id;
+                    const label = `${m.name} ${m.nick_name ? `(${m.nick_name})` : ''} - ${m.relation}`;
+                    option.textContent = m.is_pending ? `${label} 🕒 (Pending)` : label;
+                    if (m.is_pending) {
+                        option.style.fontStyle = 'italic';
+                        option.style.color = '#818cf8';
+                    }
+                    
+                    parentSelect.appendChild(option.cloneNode(true));
+                    spouseSelect.appendChild(option.cloneNode(true));
+                    siblingSelect.appendChild(option);
+                }
+            });
         }
 
         function openEditMemberModal(familyId, memberId) {
@@ -1276,110 +1377,136 @@ $username = $_SESSION['username'];
         function renderMemberList() {
             const family = globalFamiliesData.find(f => f.id == currentViewFamilyId);
             const content = document.getElementById('viewMembersContent');
+            if (!content) return;
             
-            let html = '';
-            if(family.members && family.members.length > 0) {
-                family.members.forEach((m, index) => {
-                    let parentNameHtml = '';
-                    if (m.parent_member_id) {
-                        const parent = family.members.find(p => p.id == m.parent_member_id);
-                        if (parent) {
-                            parentNameHtml = `<div style="font-size: 0.85rem; color: #818cf8; margin-top: 0.2rem;">👨‍👦 Parent: ${parent.name}</div>`;
+            let allMembers = [];
+            
+            // 1. Approved Members
+            if (family && family.members) {
+                family.members.forEach(m => {
+                    allMembers.push({ ...m, is_pending: false });
+                });
+            }
+
+            // 2. Pending Members (Current Admin's additions)
+            if (userRole === 'admin' && globalPendingData) {
+                globalPendingData.forEach(p => {
+                    if (p.action_type === 'add_member' && p.status === 'pending') {
+                        const payload = JSON.parse(p.payload);
+                        if (payload.family_id == currentViewFamilyId) {
+                            allMembers.push({
+                                id: `pending_mem_${p.id}`,
+                                name: payload.name,
+                                nick_name: payload.nick_name,
+                                gender: payload.gender,
+                                relation_to_owner: payload.relation_to_owner,
+                                parent_member_id: payload.parent_member_id,
+                                spouse_member_id: payload.spouse_member_id,
+                                photo_path: payload.photo_path || '',
+                                blood_group: payload.blood_group,
+                                education: payload.education,
+                                member_job: payload.member_job,
+                                job_details: payload.job_details,
+                                member_marital: payload.member_marital,
+                                spouse_name: payload.spouse_name,
+                                dob_dod: payload.dob_dod,
+                                dob_dod_type: payload.dob_dod_type,
+                                is_pending: true
+                            });
                         }
                     }
-
-                    // Deep Relationship Intelligence (Within this household)
-                    let relationsHtml = '';
-                    const householdChildren = family.members.filter(c => c.parent_member_id == m.id);
-                    const householdSpouse = m.spouse_member_id ? family.members.find(sm => sm.id == m.spouse_member_id) : null;
-                    
-                    // Siblings: Same parent (biological)
-                    const householdSiblings = m.parent_member_id ? 
-                        family.members.filter(s => s.parent_member_id == m.parent_member_id && s.id != m.id) : [];
-
-                    // Grandchildren and In-Laws
-                    const grandchildren = [];
-                    const inLaws = [];
-                    householdChildren.forEach(child => {
-                        // Find child's children (grandchildren of m)
-                        const gc = family.members.filter(c => c.parent_member_id == child.id);
-                        grandchildren.push(...gc);
-                        
-                        // Find child's spouse (son/daughter in law of m)
-                        const spouse = child.spouse_member_id ? family.members.find(sm => sm.id == child.spouse_member_id) : null;
-                        if (spouse) inLaws.push({ name: spouse.name, type: child.gender === 'Male' ? 'Daughter-in-law' : 'Son-in-law' });
-                    });
-
-                    if (householdChildren.length > 0 || householdSpouse || householdSiblings.length > 0 || grandchildren.length > 0 || inLaws.length > 0) {
-                        relationsHtml = `
-                        <div style="margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.4rem;">
-                            ${householdSpouse ? `<span style="background: rgba(244, 63, 94, 0.1); color: #fb7185; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">💍 Spouse: ${householdSpouse.name}</span>` : ''}
-                            ${householdChildren.map(c => `<span style="background: rgba(34, 197, 94, 0.1); color: #4ade80; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">👶 Child: ${c.name}</span>`).join('')}
-                            ${householdSiblings.map(s => `<span style="background: rgba(129, 140, 248, 0.1); color: #818cf8; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🤝 Sibling: ${s.name}</span>`).join('')}
-                            ${grandchildren.map(g => `<span style="background: rgba(245, 158, 11, 0.1); color: #fbbf24; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🧑‍🍼 Grandchild: ${g.name}</span>`).join('')}
-                            ${inLaws.map(il => `<span style="background: rgba(168, 85, 247, 0.1); color: #c084fc; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🏠 ${il.type}: ${il.name}</span>`).join('')}
-                        </div>`;
-                    }
-
-                    const memberPhoto = m.photo_path ? `<img src="${m.photo_path}" style="width: 50px; height: 50px; border-radius: 50%; object-fit: cover; border: 2px solid var(--primary);">` : `
-                        <div style="width: 50px; height: 50px; border-radius: 50%; background: rgba(129, 140, 248, 0.2); display: flex; align-items: center; justify-content: center; font-size: 1.2rem; color: #818cf8; border: 1px solid rgba(129, 140, 248, 0.3);">
-                            ${m.name.charAt(0)}
-                        </div>
-                    `;
-
-                    html += `
-                    <div class="member-detail-card" style="background: rgba(255,255,255,0.05); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; border: 1px solid rgba(255,255,255,0.1);">
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.8rem;">
-                            <div style="display: flex; gap: 1rem; align-items: center;">
-                                ${memberPhoto}
-                                <div>
-                                    <h4 style="margin: 0; font-size: 1.2rem; color: var(--primary);">${m.name} ${m.nick_name ? `<span style="color: var(--text-muted); font-size: 0.9rem;">(${m.nick_name})</span>` : ''}</h4>
-                                    <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.2rem;">
-                                        👤 ${m.relation_to_owner} ${m.child_type ? `• ${m.child_type}` : ''}
-                                    </div>
-                                    ${parentNameHtml}
-                                    ${relationsHtml}
-                                </div>
-                            </div>
-                            ${(userRole === 'admin' || userRole === 'super_admin') ? `
-                                <div style="display: flex; gap: 0.5rem;">
-                                    <button class="btn-sm btn-outline" onclick="closeModal('viewMembersModal'); openEditMemberModal(${family.id}, ${m.id})">Edit Profile</button>
-                                    <button class="btn-sm btn-outline btn-danger" onclick="deleteMember(${m.id})">Delete</button>
-                                </div>
-                            ` : ''}
-                        </div>
-                        
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; font-size: 0.9rem;">
-                            ${m.blood_group ? `<div>🩸 <strong>Blood Group:</strong> <span style="color: #ef4444; font-weight: bold;">${m.blood_group}</span></div>` : ''}
-                            ${m.dob_dod ? `<div>📅 <strong>${m.dob_dod_type || 'DOB'}:</strong> ${m.dob_dod}</div>` : ''}
-                            ${m.mobile_number ? `<div>📱 <strong>Mobile:</strong> ${m.mobile_number}</div>` : ''}
-                            ${m.education ? `<div>🎓 <strong>Education:</strong> ${m.education}</div>` : ''}
-                            ${m.marital_status ? `<div>💍 <strong>Status:</strong> ${m.marital_status}</div>` : ''}
-                            ${m.job_status ? `<div>💼 <strong>Job Status:</strong> ${m.job_status}</div>` : ''}
-                        </div>
-
-                        ${m.job_details ? `<div style="margin-top: 0.8rem; padding-top: 0.8rem; border-top: 1px dashed rgba(255,255,255,0.1); font-size: 0.9rem;">📝 <strong>Job Details:</strong> ${m.job_details}</div>` : ''}
-                        
-                        ${m.marital_status === 'Married' ? `
-                        <div style="margin-top: 1rem; background: rgba(129, 140, 248, 0.1); padding: 1rem; border-radius: 8px;">
-                            <div style="font-weight: 600; color: #818cf8; margin-bottom: 0.5rem; font-size: 0.85rem; text-transform: uppercase;">Marital Information</div>
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size: 0.85rem;">
-                                <div>🤝 <strong>Spouse:</strong> ${m.spouse_name || 'N/A'}</div>
-                                <div>📆 <strong>Marriage Date:</strong> ${m.date_of_marriage || 'N/A'}</div>
-                                <div>🏙️ <strong>In-law's Village:</strong> ${m.in_laws_village || 'N/A'}</div>
-                                <div>🧔 <strong>In-law's Father:</strong> ${m.in_laws_father_name || 'N/A'}</div>
-                            </div>
-                        </div>
-                        ` : ''}
-
-                        ${m.others ? `<div style="margin-top: 1rem; color: #94a3b8; font-style: italic; font-size: 0.85rem; padding: 0.5rem; background: rgba(255,255,255,0.03); border-radius: 4px;">📝 Note: ${m.others}</div>` : ''}
-                    </div>`;
                 });
-            } else {
-                html = '<div style="color:var(--text-muted); text-align: center; padding: 3rem;">No member data found for this family.</div>';
             }
+
+            if (allMembers.length === 0) {
+                content.innerHTML = '<div style="text-align:center; padding:3rem; color:var(--text-muted);">No members found in this household yet.</div>';
+                return;
+            }
+
+            let html = '';
+            allMembers.forEach((m) => {
+                let parentNameHtml = '';
+                if (m.parent_member_id) {
+                    const parent = allMembers.find(p => p.id == m.parent_member_id);
+                    if (parent) {
+                        parentNameHtml = `<div style="font-size: 0.85rem; color: #818cf8; margin-top: 0.2rem;">👨‍👦 Parent: ${parent.name}</div>`;
+                    }
+                }
+
+                // Deep Relationship Intelligence
+                let relationsHtml = '';
+                const householdChildren = allMembers.filter(c => c.parent_member_id == m.id);
+                const householdSpouse = m.spouse_member_id ? allMembers.find(sm => sm.id == m.spouse_member_id) : null;
+                const householdSiblings = m.parent_member_id ? allMembers.filter(s => s.parent_member_id == m.parent_member_id && s.id != m.id) : [];
+
+                const grandchildren = [];
+                const inLaws = [];
+                householdChildren.forEach(child => {
+                    const gc = allMembers.filter(c => c.parent_member_id == child.id);
+                    grandchildren.push(...gc);
+                    const spouse = child.spouse_member_id ? allMembers.find(sm => sm.id == child.spouse_member_id) : null;
+                    if (spouse) inLaws.push({ name: spouse.name, type: child.gender === 'Male' ? 'Daughter-in-law' : 'Son-in-law' });
+                });
+
+                if (householdChildren.length > 0 || householdSpouse || householdSiblings.length > 0 || grandchildren.length > 0 || inLaws.length > 0) {
+                    relationsHtml = `
+                    <div style="margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.4rem;">
+                        ${householdSpouse ? `<span style="background: rgba(244, 63, 94, 0.1); color: #fb7185; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">💍 Spouse: ${householdSpouse.name}</span>` : ''}
+                        ${householdChildren.map(c => `<span style="background: rgba(34, 197, 94, 0.1); color: #4ade80; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">👶 Child: ${c.name}</span>`).join('')}
+                        ${householdSiblings.map(s => `<span style="background: rgba(129, 140, 248, 0.1); color: #818cf8; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🤝 Sibling: ${s.name}</span>`).join('')}
+                        ${grandchildren.map(g => `<span style="background: rgba(245, 158, 11, 0.1); color: #fbbf24; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🧑‍🍼 Grandchild: ${g.name}</span>`).join('')}
+                        ${inLaws.map(il => `<span style="background: rgba(168, 85, 247, 0.1); color: #c084fc; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🏠 ${il.type}: ${il.name}</span>`).join('')}
+                    </div>`;
+                }
+
+                const memberPhoto = m.photo_path ? `<img src="${m.photo_path}" style="width: 50px; height: 50px; border-radius: 50%; object-fit: cover; border: 2px solid ${m.is_pending ? '#818cf8' : 'var(--primary)'};">` : `
+                    <div style="width: 50px; height: 50px; border-radius: 50%; background: ${m.is_pending ? 'rgba(129, 140, 248, 0.3)' : 'rgba(129, 140, 248, 0.2)'}; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; color: #818cf8; border: 1px solid rgba(129, 140, 248, 0.3);">
+                        ${m.name.charAt(0)}
+                    </div>
+                `;
+
+                const pendingBadge = m.is_pending ? `<span class="result-badge member" style="margin-left: 0.5rem; font-size: 0.65rem; padding: 2px 8px; border-radius: 99px; background: rgba(129, 140, 248, 0.2); color: #818cf8; text-transform: uppercase;">🕒 Pending Approval</span>` : '';
+                const cardStyle = m.is_pending ? 'border: 1px dashed #818cf8; background: rgba(129, 140, 248, 0.05);' : 'border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05);';
+
+                html += `
+                <div class="member-detail-card" style="${cardStyle} border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.8rem;">
+                        <div style="display: flex; gap: 1rem; align-items: center;">
+                            ${memberPhoto}
+                            <div>
+                                <h4 style="margin: 0; font-size: 1.2rem; color: var(--primary);">${m.name} ${m.nick_name ? `<span style="color: var(--text-muted); font-size: 0.9rem;">(${m.nick_name})</span>` : ''} ${pendingBadge}</h4>
+                                <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.2rem;">
+                                    👤 ${m.relation_to_owner} ${m.child_type ? `• ${m.child_type}` : ''}
+                                </div>
+                                ${parentNameHtml}
+                                ${relationsHtml}
+                            </div>
+                        </div>
+                        ${(userRole === 'admin' || userRole === 'super_admin') ? `
+                            <div style="display: flex; gap: 0.5rem;">
+                                <button class="btn-sm btn-outline" onclick="closeModal('viewMembersModal'); openEditMemberModal('${currentViewFamilyId}', '${m.id}')">Edit Profile</button>
+                                <button class="btn-sm btn-outline btn-danger" onclick="deleteMember('${m.id}')">Delete</button>
+                            </div>
+                        ` : ''}
+                    </div>
+                    
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; font-size: 0.9rem;">
+                        ${m.blood_group ? `<div>🩸 <strong>Blood Group:</strong> <span style="color: #ef4444; font-weight: bold;">${m.blood_group}</span></div>` : ''}
+                        ${m.dob_dod ? `<div>📅 <strong>${m.dob_dod_type || 'Born'}:</strong> ${m.dob_dod}</div>` : ''}
+                        ${m.mobile_number ? `<div>📱 <strong>Mobile:</strong> ${m.mobile_number}</div>` : ''}
+                        ${m.education ? `<div>🎓 <strong>Education:</strong> ${m.education}</div>` : ''}
+                        ${m.marital_status ? `<div>💍 <strong>Status:</strong> ${m.marital_status}</div>` : ''}
+                        ${m.job_status ? `<div>💼 <strong>Job Status:</strong> ${m.job_status}</div>` : ''}
+                    </div>
+                </div>
+                `;
+            });
             content.innerHTML = html;
         }
+
+
+        // Member rendering logic completed above.
+
 
         async function exportToPDF() {
             const { jsPDF } = window.jspdf;
@@ -1466,11 +1593,27 @@ $username = $_SESSION['username'];
         function renderFamilyTree() {
             const currentFamily = globalFamiliesData.find(f => f.id == currentViewFamilyId);
             const content = document.getElementById('viewMembersContent');
-            if (!currentFamily || !currentFamily.members) return;
+            if (!content) return;
 
-            // Phase 1: Village-Wide Upward Tracing
-            const allVillageMembers = globalFamiliesData.flatMap(f => f.members || []);
-            const owner = currentFamily.members.find(m => m.relation_to_owner === 'Self (Owner)');
+            // Combine Live and Pending Members for Tree Tracing
+            let allVillageMembers = globalFamiliesData.flatMap(f => f.members || []);
+            if (userRole === 'admin' && globalPendingData) {
+                globalPendingData.forEach(p => {
+                    if (p.action_type === 'add_member' && p.status === 'pending') {
+                        const payload = JSON.parse(p.payload);
+                        allVillageMembers.push({
+                            id: `pending_mem_${p.id}`,
+                            name: payload.name,
+                            family_id: payload.family_id,
+                            parent_member_id: payload.parent_member_id,
+                            relation_to_owner: payload.relation_to_owner,
+                            is_pending: true
+                        });
+                    }
+                });
+            }
+
+            const owner = allVillageMembers.find(m => m.family_id == currentViewFamilyId && m.relation_to_owner === 'Self (Owner)');
             if (!owner) {
                 content.innerHTML = '<div style="color:var(--text-muted); text-align: center; padding: 3rem;">House Owner not found.</div>';
                 return;
@@ -1478,11 +1621,10 @@ $username = $_SESSION['username'];
 
             let absoluteRoot = owner;
             let iterations = 0;
-            while (iterations < 50) { // Increased iterations for deep village lineages
+            while (iterations < 50) { 
                 let parent = allVillageMembers.find(m => m.id == absoluteRoot.parent_member_id);
                 
                 if (!parent) {
-                    // Jump across families if this family has an origin_member_id
                     const memFamily = globalFamiliesData.find(f => f.id == absoluteRoot.family_id);
                     if (memFamily && memFamily.origin_member_id) {
                         parent = allVillageMembers.find(m => m.id == memFamily.origin_member_id);
@@ -1496,6 +1638,7 @@ $username = $_SESSION['username'];
                 }
                 iterations++;
             }
+
 
             // Phase 2: Trigger React Rendering
             content.innerHTML = `
@@ -2099,12 +2242,28 @@ $username = $_SESSION['username'];
             window.print();
         }
 
+        // Navigation & Sidebar
+        function toggleSidebar() {
+            const sidebar = document.querySelector('.sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+            if (sidebar) sidebar.classList.toggle('active');
+            if (overlay) overlay.classList.toggle('active');
+        }
+
         // User Management & View Switching Logic
         let currentView = 'home';
 
         function switchMainView(view) {
             currentView = view;
             localStorage.setItem('shidhlajury_last_view', view);
+            
+            // Close sidebar on mobile after navigation
+            if (window.innerWidth < 1024) {
+                const sidebar = document.querySelector('.sidebar');
+                const overlay = document.getElementById('sidebarOverlay');
+                if (sidebar) sidebar.classList.remove('active');
+                if (overlay) overlay.classList.remove('active');
+            }
             const homeView       = document.getElementById('homePortfolioWrapper');
             const analyticsView  = document.getElementById('analyticsView');
             const mapView        = document.getElementById('mapView');
@@ -2614,7 +2773,89 @@ $username = $_SESSION['username'];
             if (container && dropdown && !container.contains(e.target)) {
                 dropdown.classList.remove('active');
             }
+
+            // Close search results on click outside
+            const sContainer = document.querySelector('.search-container');
+            const sDropdown = document.getElementById('searchDropdown');
+            if (sContainer && sDropdown && !sContainer.contains(e.target)) {
+                sDropdown.classList.remove('active');
+            }
         });
+
+        // ── Global Search Handling ─────────────────────
+        function handleGlobalSearch(q) {
+            const dropdown = document.getElementById('searchDropdown');
+            if (!q || q.length < 2) {
+                dropdown.classList.remove('active');
+                if (currentView === 'families' && window.renderFamilies) renderFamilies(q);
+                return;
+            }
+
+            let results = [];
+            let query = q.toLowerCase();
+
+            globalFamiliesData.forEach(f => {
+                let matchType = '';
+                let matchMain = '';
+                let matchSub  = '';
+
+                // Match Family Name or Owner
+                if (f.family_name?.toLowerCase().includes(query) || f.house_owner_name?.toLowerCase().includes(query)) {
+                    results.push({
+                        id: f.id,
+                        title: f.family_name || f.house_owner_name,
+                        sub: `Owner: ${f.house_owner_name} | Area: ${f.area}`,
+                        type: 'family'
+                    });
+                }
+
+                // Match Members
+                if (f.members) {
+                    f.members.forEach(m => {
+                        if (m.name?.toLowerCase().includes(query)) {
+                            results.push({
+                                id: f.id, // Point to the family
+                                title: m.name,
+                                sub: `Member of ${f.family_name || f.house_owner_name} | Role: ${m.relation_to_owner || 'Member'}`,
+                                type: 'member'
+                            });
+                        }
+                    });
+                }
+            });
+
+            // If we are in the families view, we still want to filter the grid
+            if (currentView === 'families' && window.renderFamilies) renderFamilies(q);
+
+            if (results.length === 0) {
+                dropdown.innerHTML = '<div style="padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">No matches found</div>';
+            } else {
+                dropdown.innerHTML = results.slice(0, 10).map(r => `
+                    <div class="search-result-item" onclick="navigateToFamily(${r.id})">
+                        <div class="result-main">
+                            <span class="result-title">${r.title}</span>
+                            <span class="result-sub">${r.sub}</span>
+                        </div>
+                        <span class="result-badge ${r.type}">${r.type}</span>
+                    </div>
+                `).join('');
+            }
+            dropdown.classList.add('active');
+        }
+
+        async function navigateToFamily(fid) {
+            document.getElementById('searchDropdown').classList.remove('active');
+            document.getElementById('globalSearch').value = '';
+
+            // Switch view if not already in families
+            if (currentView !== 'families') {
+                switchMainView('families');
+                // Give it a small delay for the DOM to update
+                setTimeout(() => scrollToFamily(fid), 300);
+            } else {
+                scrollToFamily(fid);
+            }
+        }
 
         // ── Analytics Module ──────────────────────────
         let analyticsCharts = {};
@@ -2934,17 +3175,24 @@ $username = $_SESSION['username'];
             const avatarUrl = member.photo ? `uploads/${member.photo}` : 
                             `https://api.dicebear.com/7.x/avataaars/svg?seed=${member.id}&gender=${member.gender === 'Female' ? 'female' : 'male'}`;
 
+            const isPendingNode = member.is_pending;
+            const badgeLabel = isPendingNode ? '🕒 PENDING' : (member.relation_to_owner || 'Member');
+
             return (
                 <div className="tw-flex tw-flex-col tw-items-center">
                     <div 
-                        className={`tw-cursor-default tw-w-16 tw-h-16 tw-rounded-full tw-bg-white tw-shadow-md tw-overflow-hidden ${ringClass}`}
+                        className={`tw-cursor-default tw-w-16 tw-h-16 tw-rounded-full tw-bg-white tw-shadow-md tw-overflow-hidden ${ringClass} ${isPendingNode ? 'tw-border-dashed tw-border-indigo-400' : ''}`}
+                        title={isPendingNode ? "Pending Approval" : ""}
                     >
                         <img src={avatarUrl} alt={member.name} className="tw-w-full tw-h-full tw-object-cover" />
                     </div>
                     
                     <div className="tw-mt-2 tw-text-center">
-                        <div className="tw-bg-indigo-50/80 tw-backdrop-blur-sm tw-px-3 tw-py-1 tw-rounded-full tw-border tw-border-indigo-100 tw-shadow-sm">
-                            <div className="tw-font-black tw-text-indigo-900 tw-text-[0.95rem] tw-leading-tight tw-tracking-tight">{member.name}</div>
+                        <div className={`tw-px-3 tw-py-1 tw-rounded-full tw-border tw-shadow-sm ${isPendingNode ? 'tw-bg-indigo-900 tw-text-white tw-border-indigo-500' : 'tw-bg-indigo-50/80 tw-backdrop-blur-sm tw-border-indigo-100'}`}>
+                            <div className={`tw-font-black tw-text-[0.8rem] tw-leading-tight ${isPendingNode ? 'tw-text-white' : 'tw-text-indigo-900'}`}>
+                                {isPendingNode ? "🕒 PENDING" : member.name}
+                            </div>
+                            {isPendingNode && <div className="tw-text-[0.65rem] tw-font-bold tw-text-indigo-200">{member.name}</div>}
                         </div>
                     </div>
                 </div>
