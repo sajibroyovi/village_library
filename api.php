@@ -63,11 +63,12 @@ function applyAction($conn, $actionType, $payload, $photoPath) {
     $resolveId = function($id) use ($conn) {
         if (!$id || $id === '') return null;
         if (!is_string($id) || !str_starts_with($id, 'pending_')) return $id;
-        $pId = str_replace('pending_', '', $id);
+        // Handle both 'pending_' and 'pending_mem_' prefixes
+        $pId = str_replace(['pending_mem_', 'pending_'], '', $id);
         $stmt = $conn->prepare("SELECT target_id FROM pending_actions WHERE id=? AND status='approved' LIMIT 1");
         $stmt->execute([$pId]);
         $targetId = $stmt->fetchColumn();
-        return $targetId ?: null; // Return null if not found or not approved yet
+        return $targetId ?: null; 
     };
 
     switch ($actionType) {
@@ -99,25 +100,51 @@ function applyAction($conn, $actionType, $payload, $photoPath) {
             $sid = $resolveId($p['spouse_member_id'] ?? '');
             $fid = $resolveId($p['family_id'] ?? '');
             
-            // Critical: If family is still a string like 'pending_15', fail gracefully if not resolved
             if (!is_numeric($fid)) throw new Exception("Cannot approve member: Parent household is still pending approval.");
 
+            // Handle Photo Path (from payload or direct upload)
+            $livePhoto = $p['photo_path'] ?? null;
+            if (isset($photoFile) && $photoFile && $photoFile['tmp_name']) {
+                $livePhoto = 'uploads/' . time() . '_' . $photoFile['name'];
+                move_uploaded_file($photoFile['tmp_name'], $livePhoto);
+            }
+
+            // Logic Correction: Avoid setting 'horizontal' or upward branches as children
+            $horizontalRels = ['Parent', 'Uncle', 'Aunt'];
+            $actualPid = in_array($p['relation_to_owner'], $horizontalRels) ? null : $pid;
+
             $stmt = $conn->prepare("INSERT INTO family_members (family_id, name, relation_to_owner, mobile_number, job_status, marital_status, nick_name, gender, dob_dod_type, dob_dod, education, job_details, spouse_name, date_of_marriage, in_laws_village, in_laws_father_name, others, blood_group, member_house_no, child_type, parent_member_id, spouse_member_id, photo_path) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
-            $stmt->execute([$fid, $p['name'], $p['relation_to_owner'], $p['mobile_number'] ?? '', $p['job_status'] ?? '', $p['marital_status'] ?? 'Single', $p['nick_name'] ?? '', $p['gender'] ?? '', $p['dob_dod_type'] ?? 'DOB', $p['dob_dod'] ?? '', $p['education'] ?? '', $p['job_details'] ?? '', $p['spouse_name'] ?? '', $p['date_of_marriage'] ?? '', $p['in_laws_village'] ?? '', $p['in_laws_father_name'] ?? '', $p['others'] ?? '', $p['blood_group'] ?? '', $p['member_house_no'] ?? '', $p['child_type'] ?? '', $pid, $sid, $livePhoto]);
+            $stmt->execute([$fid, $p['name'], $p['relation_to_owner'], $p['mobile_number'] ?? '', $p['job_status'] ?? '', $p['marital_status'] ?? 'Single', $p['nick_name'] ?? '', $p['gender'] ?? '', $p['dob_dod_type'] ?? 'DOB', $p['dob_dod'] ?? '', $p['education'] ?? '', $p['job_details'] ?? '', $p['spouse_name'] ?? '', $p['date_of_marriage'] ?? '', $p['in_laws_village'] ?? '', $p['in_laws_father_name'] ?? '', $p['others'] ?? '', $p['blood_group'] ?? '', $p['member_house_no'] ?? '', $p['child_type'] ?? '', $actualPid, $sid, $livePhoto]);
             $newId = $conn->lastInsertId();
+            
+            // Reverse Update: Link the child ($pid) to this new Parent
+            if ($p['relation_to_owner'] === 'Parent' && $pid) {
+                $conn->prepare("UPDATE family_members SET parent_member_id=? WHERE id=?")->execute([$newId, $pid]);
+            }
+            
             if ($sid) $conn->prepare("UPDATE family_members SET spouse_member_id=? WHERE id=?")->execute([$newId, $sid]);
             return $newId;
         case 'edit_member':
             $p = $payload;
             $pid = $resolveId($p['parent_member_id'] ?? '');
             $sid = $resolveId($p['spouse_member_id'] ?? '');
+
+            // Logic Correction: If this person IS a parent of another member ($pid),
+            // then $pid is the child, and we should NOT set it as the member's parent.
+            $actualPid = ($p['relation_to_owner'] === 'Parent') ? null : $pid;
+
             if ($livePhoto) {
-                $stmt = $conn->prepare("UPDATE family_members SET name=?,relation_to_owner=?,mobile_number=?,job_status=?,marital_status=?,nick_name=?,gender=?,dob_dod_type=?,dob_dod=?,education=?,job_details=?,spouse_name=?,date_of_marriage=?,in_laws_village=?,in_laws_father_name=?,others=?,blood_group=?,member_house_no=?,child_type=?,parent_member_id=?,spouse_member_id=?,photo_path=? WHERE id=?");
-                $stmt->execute([$p['name'],$p['relation_to_owner'],$p['mobile_number']??'',$p['job_status']??'',$p['marital_status']??'Single',$p['nick_name']??'',$p['gender']??'',$p['dob_dod_type']??'DOB',$p['dob_dod']??'',$p['education']??'',$p['job_details']??'',$p['spouse_name']??'',$p['date_of_marriage']??'',$p['in_laws_village']??'',$p['in_laws_father_name']??'',$p['others']??'',$p['blood_group']??'',$p['member_house_no']??'',$p['child_type']??'',$pid,$sid,$livePhoto,$p['id']]);
+                $stmt = $conn->prepare("UPDATE family_members SET name=?, relation_to_owner=?, mobile_number=?, job_status=?, marital_status=?, nick_name=?, gender=?, dob_dod_type=?, dob_dod=?, education=?, job_details=?, spouse_name=?, date_of_marriage=?, in_laws_village=?, in_laws_father_name=?, others=?, blood_group=?, member_house_no=?, child_type=?, parent_member_id=?, spouse_member_id=?, photo_path=? WHERE id=?");
+                $stmt->execute([$p['name'], $p['relation_to_owner'], $p['mobile_number'] ?? '', $p['job_status'] ?? '', $p['marital_status'] ?? 'Single', $p['nick_name'] ?? '', $p['gender'] ?? '', $p['dob_dod_type'] ?? 'DOB', $p['dob_dod'] ?? '', $p['education'] ?? '', $p['job_details'] ?? '', $p['spouse_name'] ?? '', $p['date_of_marriage'] ?? '', $p['in_laws_village'] ?? '', $p['in_laws_father_name'] ?? '', $p['others'] ?? '', $p['blood_group'] ?? '', $p['member_house_no'] ?? '', $p['child_type'] ?? '', $actualPid, $sid, $livePhoto, $p['id']]);
             } else {
-                $stmt = $conn->prepare("UPDATE family_members SET name=?,relation_to_owner=?,mobile_number=?,job_status=?,marital_status=?,nick_name=?,gender=?,dob_dod_type=?,dob_dod=?,education=?,job_details=?,spouse_name=?,date_of_marriage=?,in_laws_village=?,in_laws_father_name=?,others=?,blood_group=?,member_house_no=?,child_type=?,parent_member_id=?,spouse_member_id=? WHERE id=?");
-                $stmt->execute([$p['name'],$p['relation_to_owner'],$p['mobile_number']??'',$p['job_status']??'',$p['marital_status']??'Single',$p['nick_name']??'',$p['gender']??'',$p['dob_dod_type']??'DOB',$p['dob_dod']??'',$p['education']??'',$p['job_details']??'',$p['spouse_name']??'',$p['date_of_marriage']??'',$p['in_laws_village']??'',$p['in_laws_father_name']??'',$p['others']??'',$p['blood_group']??'',$p['member_house_no']??'',$p['child_type']??'',$pid,$sid,$p['id']]);
+                $stmt = $conn->prepare("UPDATE family_members SET name=?, relation_to_owner=?, mobile_number=?, job_status=?, marital_status=?, nick_name=?, gender=?, dob_dod_type=?, dob_dod=?, education=?, job_details=?, spouse_name=?, date_of_marriage=?, in_laws_village=?, in_laws_father_name=?, others=?, blood_group=?, member_house_no=?, child_type=?, parent_member_id=?, spouse_member_id=? WHERE id=?");
+                $stmt->execute([$p['name'], $p['relation_to_owner'], $p['mobile_number'] ?? '', $p['job_status'] ?? '', $p['marital_status'] ?? 'Single', $p['nick_name'] ?? '', $p['gender'] ?? '', $p['dob_dod_type'] ?? 'DOB', $p['dob_dod'] ?? '', $p['education'] ?? '', $p['job_details'] ?? '', $p['spouse_name'] ?? '', $p['date_of_marriage'] ?? '', $p['in_laws_village'] ?? '', $p['in_laws_father_name'] ?? '', $p['others'] ?? '', $p['blood_group'] ?? '', $p['member_house_no'] ?? '', $p['child_type'] ?? '', $actualPid, $sid, $p['id']]);
             }
+            
+            if ($p['relation_to_owner'] === 'Parent' && $pid) {
+                $conn->prepare("UPDATE family_members SET parent_member_id=? WHERE id=?")->execute([$p['id'], $pid]);
+            }
+
             if ($sid) $conn->prepare("UPDATE family_members SET spouse_member_id=? WHERE id=?")->execute([$p['id'], $sid]);
             return $p['id'];
         case 'delete_member':
@@ -189,9 +216,20 @@ if ($action === 'get_families') {
         try {
             $pid = ($p['parent_member_id'] ?? '') === '' ? null : $p['parent_member_id'];
             $sid = ($p['spouse_member_id'] ?? '') === '' ? null : $p['spouse_member_id'];
+            
+            // Logic Correction: Avoid setting 'horizontal' or upward branches as children
+            $horizontalRels = ['Parent', 'Uncle', 'Aunt'];
+            $actualPid = in_array($p['relation_to_owner'], $horizontalRels) ? null : $pid;
+
             $stmt = $conn->prepare("INSERT INTO family_members (family_id, name, relation_to_owner, mobile_number, job_status, marital_status, nick_name, gender, dob_dod_type, dob_dod, education, job_details, spouse_name, date_of_marriage, in_laws_village, in_laws_father_name, others, blood_group, member_house_no, child_type, parent_member_id, spouse_member_id, photo_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            $stmt->execute([$p['family_id'], $p['name'], $p['relation_to_owner'], $p['mobile_number'] ?? '', $p['job_status'] ?? '', $p['marital_status'] ?? 'Single', $p['nick_name'] ?? '', $p['gender'] ?? '', $p['dob_dod_type'] ?? 'DOB', $p['dob_dod'] ?? '', $p['education'] ?? '', $p['job_details'] ?? '', $p['spouse_name'] ?? '', $p['date_of_marriage'] ?? '', $p['in_laws_village'] ?? '', $p['in_laws_father_name'] ?? '', $p['others'] ?? '', $p['blood_group'] ?? '', $p['member_house_no'] ?? '', $p['child_type'] ?? '', $pid, $sid, $photo_path]);
+            $stmt->execute([$p['family_id'], $p['name'], $p['relation_to_owner'], $p['mobile_number'] ?? '', $p['job_status'] ?? '', $p['marital_status'] ?? 'Single', $p['nick_name'] ?? '', $p['gender'] ?? '', $p['dob_dod_type'] ?? 'DOB', $p['dob_dod'] ?? '', $p['education'] ?? '', $p['job_details'] ?? '', $p['spouse_name'] ?? '', $p['date_of_marriage'] ?? '', $p['in_laws_village'] ?? '', $p['in_laws_father_name'] ?? '', $p['others'] ?? '', $p['blood_group'] ?? '', $p['member_house_no'] ?? '', $p['child_type'] ?? '', $actualPid, $sid, $photo_path]);
             $new_id = $conn->lastInsertId();
+            
+            // Reverse Update: Link the child ($pid) to this new Parent
+            if ($p['relation_to_owner'] === 'Parent' && $pid) {
+                $conn->prepare("UPDATE family_members SET parent_member_id=? WHERE id=?")->execute([$new_id, $pid]);
+            }
+            
             if ($sid) $conn->prepare("UPDATE family_members SET spouse_member_id=? WHERE id=?")->execute([$new_id, $sid]);
             echo json_encode(['status' => 'success', 'message' => 'Member added', 'photo' => $photo_path]);
         } catch (Exception $e) { echo json_encode(['status' => 'error', 'message' => 'DB error: ' . $e->getMessage()]); }
@@ -230,13 +268,24 @@ if ($action === 'get_families') {
         try {
             $pid = ($p['parent_member_id'] ?? '') === '' ? null : $p['parent_member_id'];
             $sid = ($p['spouse_member_id'] ?? '') === '' ? null : $p['spouse_member_id'];
+            
+            // Logic Correction: Avoid setting 'horizontal' or upward branches as children
+            $horizontalRels = ['Parent', 'Uncle', 'Aunt'];
+            $actualPid = in_array($p['relation_to_owner'], $horizontalRels) ? null : $pid;
+
             if ($new_photo) {
                 $stmt = $conn->prepare("UPDATE family_members SET name=?,relation_to_owner=?,mobile_number=?,job_status=?,marital_status=?,nick_name=?,gender=?,dob_dod_type=?,dob_dod=?,education=?,job_details=?,spouse_name=?,date_of_marriage=?,in_laws_village=?,in_laws_father_name=?,others=?,blood_group=?,member_house_no=?,child_type=?,parent_member_id=?,spouse_member_id=?,photo_path=? WHERE id=?");
-                $stmt->execute([$p['name'],$p['relation_to_owner'],$p['mobile_number']??'',$p['job_status']??'',$p['marital_status']??'Single',$p['nick_name']??'',$p['gender']??'',$p['dob_dod_type']??'DOB',$p['dob_dod']??'',$p['education']??'',$p['job_details']??'',$p['spouse_name']??'',$p['date_of_marriage']??'',$p['in_laws_village']??'',$p['in_laws_father_name']??'',$p['others']??'',$p['blood_group']??'',$p['member_house_no']??'',$p['child_type']??'',$pid,$sid,$new_photo,$id]);
+                $stmt->execute([$p['name'],$p['relation_to_owner'],$p['mobile_number']??'',$p['job_status']??'',$p['marital_status']??'Single',$p['nick_name']??'',$p['gender']??'',$p['dob_dod_type']??'DOB',$p['dob_dod']??'',$p['education']??'',$p['job_details']??'',$p['spouse_name']??'',$p['date_of_marriage']??'',$p['in_laws_village']??'',$p['in_laws_father_name']??'',$p['others']??'',$p['blood_group']??'',$p['member_house_no']??'',$p['child_type']??'',$actualPid,$sid,$new_photo,$id]);
             } else {
                 $stmt = $conn->prepare("UPDATE family_members SET name=?,relation_to_owner=?,mobile_number=?,job_status=?,marital_status=?,nick_name=?,gender=?,dob_dod_type=?,dob_dod=?,education=?,job_details=?,spouse_name=?,date_of_marriage=?,in_laws_village=?,in_laws_father_name=?,others=?,blood_group=?,member_house_no=?,child_type=?,parent_member_id=?,spouse_member_id=? WHERE id=?");
-                $stmt->execute([$p['name'],$p['relation_to_owner'],$p['mobile_number']??'',$p['job_status']??'',$p['marital_status']??'Single',$p['nick_name']??'',$p['gender']??'',$p['dob_dod_type']??'DOB',$p['dob_dod']??'',$p['education']??'',$p['job_details']??'',$p['spouse_name']??'',$p['date_of_marriage']??'',$p['in_laws_village']??'',$p['in_laws_father_name']??'',$p['others']??'',$p['blood_group']??'',$p['member_house_no']??'',$p['child_type']??'',$pid,$sid,$id]);
+                $stmt->execute([$p['name'],$p['relation_to_owner'],$p['mobile_number']??'',$p['job_status']??'',$p['marital_status']??'Single',$p['nick_name']??'',$p['gender']??'',$p['dob_dod_type']??'DOB',$p['dob_dod']??'',$p['education']??'',$p['job_details']??'',$p['spouse_name']??'',$p['date_of_marriage']??'',$p['in_laws_village']??'',$p['in_laws_father_name']??'',$p['others']??'',$p['blood_group']??'',$p['member_house_no']??'',$p['child_type']??'',$actualPid,$sid,$id]);
             }
+            
+            // Reverse Update
+            if ($p['relation_to_owner'] === 'Parent' && $pid) {
+                $conn->prepare("UPDATE family_members SET parent_member_id=? WHERE id=?")->execute([$id, $pid]);
+            }
+            
             if ($sid) $conn->prepare("UPDATE family_members SET spouse_member_id=? WHERE id=?")->execute([$id, $sid]);
             echo json_encode(['status' => 'success', 'message' => 'Member updated', 'photo' => $new_photo]);
         } catch (Exception $e) { echo json_encode(['status' => 'error', 'message' => 'DB error: ' . $e->getMessage()]); }
@@ -301,6 +350,26 @@ if ($action === 'get_families') {
         $pst->execute([json_encode($payload), $photo, $pending_id]);
         
         echo json_encode(['status' => 'success', 'message' => 'Pending request updated successfully']);
+    } catch (Exception $e) { echo json_encode(['status' => 'error', 'message' => 'DB error: ' . $e->getMessage()]); }
+
+} elseif ($action === 'delete_pending_action') {
+    if ($role === 'user') { echo json_encode(['status' => 'error', 'message' => 'Permission denied']); exit; }
+    $pending_id = $_POST['pending_id'] ?? '';
+    if (!$pending_id) { echo json_encode(['status' => 'error', 'message' => 'Missing Pending ID']); exit; }
+    
+    try {
+        $stmt = $conn->prepare("SELECT * FROM pending_actions WHERE id=? AND status='pending'");
+        $stmt->execute([$pending_id]);
+        $row = $stmt->fetch();
+        if (!$row) { echo json_encode(['status' => 'error', 'message' => 'Request not found or already reviewed']); exit; }
+        
+        // Security check: Only the owner or super_admin can discard
+        if ($role !== 'super_admin' && $row['submitted_by_user_id'] != $user_id) {
+            echo json_encode(['status' => 'error', 'message' => 'Unauthorized to discard this request']); exit;
+        }
+
+        $conn->prepare("DELETE FROM pending_actions WHERE id=?")->execute([$pending_id]);
+        echo json_encode(['status' => 'success', 'message' => 'Pending request discarded successfully']);
     } catch (Exception $e) { echo json_encode(['status' => 'error', 'message' => 'DB error: ' . $e->getMessage()]); }
 
 // ── Approval Queue ──────────────────────────────

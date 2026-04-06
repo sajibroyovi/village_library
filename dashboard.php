@@ -14,6 +14,25 @@ $username = $_SESSION['username'];
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard - Family Information Portal</title>
+    
+    <!-- FOUC Prevention Script: Parse active tab before DOM rendering -->
+    <script>
+        const savedView = localStorage.getItem('activeDashboardTab') || 'home';
+        document.documentElement.setAttribute('data-active-view', savedView);
+    </script>
+    <style>
+        /* Immediately hide all unselected main views to prevent flashing during F5 */
+        html:not([data-active-view="home"]) body #homePortfolioWrapper { display: none !important; }
+        html:not([data-active-view="analytics"]) body #analyticsView { display: none !important; }
+        html:not([data-active-view="map"]) body #mapView { display: none !important; }
+        html:not([data-active-view="newsfeed"]) body #newsfeedView { display: none !important; }
+        html:not([data-active-view="families"]) body #familiesDirectoryHeader,
+        html:not([data-active-view="families"]) body #familiesGrid,
+        html:not([data-active-view="families"]) body .filter-container { display: none !important; }
+        html:not([data-active-view="users"]) body #userManagementView { display: none !important; }
+        html:not([data-active-view="approvals"]) body #approvalQueueView { display: none !important; }
+        html:not([data-active-view="bin"]) body #recycleBinView { display: none !important; }
+    </style>
     <link rel="stylesheet" href="assets/css/style.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
     <script src="assets/js/app.js"></script>
@@ -52,7 +71,6 @@ $username = $_SESSION['username'];
     </script>
 </head>
 <body>
-    <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
     <div class="dashboard-layout">
         <!-- Sidebar -->
         <aside class="sidebar">
@@ -82,14 +100,12 @@ $username = $_SESSION['username'];
         <!-- Main Content -->
         <main class="main-content">
             <header class="header">
-                <div style="display: flex; align-items: center; gap: 1rem;">
-                    <div class="menu-toggle" onclick="toggleSidebar()">☰</div>
+                <div>
                     <h1 style="margin:0; font-size: 1.8rem; font-weight: 600;">Welcome, <?php echo htmlspecialchars($username); ?></h1>
                 </div>
                 <div class="user-profile" style="display: flex; align-items: center; gap: 1.5rem;">
                     <div class="search-container" style="flex: 1; max-width: 400px; position: relative;">
-                        <input type="text" id="globalSearch" class="form-control" autocomplete="off" placeholder="🔍 Search Family, Name, Mobile, Area..." oninput="handleGlobalSearch(this.value)" style="margin-bottom: 0; padding-left: 2.5rem; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1);">
-                        <div id="searchDropdown" class="search-results-dropdown"></div>
+                        <input type="text" id="globalSearch" class="form-control" placeholder="🔍 Search Family, Name, Mobile, Area..." style="margin-bottom: 0; padding-left: 2.5rem; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1);">
                     </div>
                     
                     <div class="notification-wrapper" onclick="toggleNotifications()">
@@ -132,7 +148,7 @@ $username = $_SESSION['username'];
                         <span class="tw-absolute -tw-bottom-8 -tw-right-4 tw-text-6xl tw-text-white/20 tw-font-serif">"</span>
                     </div>
 
-                    <div class="tw-flex tw-justify-center tw-gap-8 tw-mb-10 stats-row">
+                    <div class="tw-flex tw-justify-center tw-gap-8 tw-mb-10">
                         <div class="tw-text-center">
                             <div class="tw-text-4xl tw-font-bold tw-text-indigo-300 tw-drop-shadow" id="statFamiliesCounter">...</div>
                             <div class="tw-text-sm tw-text-indigo-100 tw-uppercase tw-tracking-wider tw-mt-1">Registered Families</div>
@@ -567,6 +583,8 @@ $username = $_SESSION['username'];
                         <option value="Spouse">Spouse</option>
                         <option value="Child">Child</option>
                         <option value="Parent">Parent</option>
+                        <option value="Uncle">Uncle</option>
+                        <option value="Aunt">Aunt</option>
                         <option value="Sibling">Sibling</option>
                         <option value="Niece">Niece</option>
                         <option value="Grand Child">Grand Child</option>
@@ -827,7 +845,6 @@ $username = $_SESSION['username'];
         let currentMemberView = 'list';
 
         async function logout() {
-            localStorage.removeItem('shidhlajury_last_view');
             await authCall('logout');
             window.location.href = 'index.php';
         }
@@ -846,26 +863,12 @@ $username = $_SESSION['username'];
 
         function populateParentFamilies(selectedId = '', excludeId = null) {
             const select = document.getElementById('parent_family_id');
-            if (!select) return;
             let html = '<option value="">🏠 No Parent Family (New Root Household)</option>';
-            
-            // Live Families
             globalFamiliesData.forEach(f => {
                 if (f.id != excludeId) {
                     html += `<option value="${f.id}" ${f.id == selectedId ? 'selected' : ''}>${f.house_owner_name} (${f.area})</option>`;
                 }
             });
-
-            // Pending Families (Current Admin's additions)
-            if (userRole === 'admin' && globalPendingData) {
-                globalPendingData.forEach(p => {
-                    if (p.action_type === 'add_family' && p.status === 'pending') {
-                        const payload = JSON.parse(p.payload);
-                        const id = `pending_${p.id}`;
-                        html += `<option value="${id}" ${id == selectedId ? 'selected' : ''} style="font-style: italic; color: #818cf8;">${payload.owner_name} 🕒 (Pending Approval)</option>`;
-                    }
-                });
-            }
             select.innerHTML = html;
         }
 
@@ -873,54 +876,15 @@ $username = $_SESSION['username'];
             const group = document.getElementById('origin_member_group');
             const select = document.getElementById('origin_member_id');
             if (!familyId) { group.style.display = 'none'; return; }
-            
-            let html = '<option value="">Select Member</option>';
-            let found = false;
-
-            // Case 1: Existing Live Family
-            const liveFamily = globalFamiliesData.find(f => f.id == familyId);
-            if (liveFamily) {
-                found = true;
-                if (liveFamily.members) {
-                    liveFamily.members.forEach(m => {
-                        html += `<option value="${m.id}" ${m.id == selectedMemberId ? 'selected' : ''}>${m.name} (${m.relation_to_owner})</option>`;
-                    });
-                }
-            }
-
-            // Case 2: Pending Family (Admin's addition)
-            if (!liveFamily && familyId.toString().startsWith('pending_')) {
-                const actionId = familyId.toString().replace('pending_', '');
-                const action = globalPendingData.find(a => a.id == actionId);
-                if (action) {
-                    found = true;
-                    const payload = JSON.parse(action.payload);
-                    const ownerId = `pending_owner_${action.id}`;
-                    html += `<option value="${ownerId}" ${ownerId == selectedMemberId ? 'selected' : ''} style="font-style: italic;">${payload.owner_name} (🕒 Initial Owner)</option>`;
-                }
-            }
-
-            // Case 3: Also check for pending ADD_MEMBER actions for this family
-            if (userRole === 'admin' && globalPendingData) {
-                globalPendingData.forEach(p => {
-                    if (p.action_type === 'add_member' && p.status === 'pending') {
-                        const payload = JSON.parse(p.payload);
-                        // Convert both to string for robust comparison (handles 'pending_' prefix)
-                        if (payload.family_id.toString() === familyId.toString()) {
-                            found = true;
-                            const mid = `pending_${p.id}`;
-                            html += `<option value="${mid}" ${mid == selectedMemberId ? 'selected' : ''} style="font-size:0.8rem; color:#818cf8;">${payload.name} 🕒 (Pending Member)</option>`;
-                        }
-                    }
+            const family = globalFamiliesData.find(f => f.id == familyId);
+            if (family && family.members) {
+                let html = '<option value="">Select Member</option>';
+                family.members.forEach(m => {
+                    html += `<option value="${m.id}" ${m.id == selectedMemberId ? 'selected' : ''}>${m.name} (${m.relation_to_owner})</option>`;
                 });
-            }
-
-            if (found) {
                 select.innerHTML = html;
                 group.style.display = 'block';
-            } else {
-                group.style.display = 'none';
-            }
+            } else { group.style.display = 'none'; }
         }
 
         // Universal Toggle Helper
@@ -1066,6 +1030,38 @@ $username = $_SESSION['username'];
         }
 
         function populateParentDropdown(familyId, excludeMemberId = null) {
+            let members = [];
+            
+            // Phase 1: Live Members belonging ONLY to this family
+            const currentFamily = globalFamiliesData.find(f => f.id == familyId);
+            if (currentFamily && currentFamily.members) {
+                currentFamily.members.forEach(m => {
+                    members.push({
+                        id: m.id,
+                        name: m.name,
+                        nick_name: m.nick_name || '',
+                        relation_to_owner: m.relation_to_owner,
+                        parent_member_id: m.parent_member_id
+                    });
+                });
+            }
+
+            // Phase 2: Other Pending Members for this SAME household request
+            globalPendingData.forEach(a => {
+                if (a.action_type === 'add_member' && a.status === 'pending') {
+                    const p = JSON.parse(a.payload);
+                    if (p.family_id == familyId) {
+                        members.push({
+                            id: `pending_mem_${a.id}`,
+                            name: p.name,
+                            nick_name: p.nick_name || '',
+                            relation_to_owner: p.relation_to_owner,
+                            parent_member_id: p.parent_member_id
+                        });
+                    }
+                }
+            });
+
             const parentSelect = document.getElementById('parent_member_id');
             const spouseSelect = document.getElementById('spouse_member_id');
             const siblingSelect = document.getElementById('sibling_member_id');
@@ -1074,74 +1070,22 @@ $username = $_SESSION['username'];
             parentSelect.innerHTML = options;
             spouseSelect.innerHTML = options;
             siblingSelect.innerHTML = options;
-
-            let members = [];
-
-            // 1. Live Members from globalFamiliesData
-            const liveFamily = globalFamiliesData.find(f => f.id == familyId);
-            if (liveFamily && liveFamily.members) {
-                liveFamily.members.forEach(m => {
-                    members.push({
-                        id: m.id,
-                        name: m.name,
-                        nick_name: m.nick_name,
-                        relation: m.relation_to_owner,
-                        is_pending: false
-                    });
-                });
-            }
-
-            // 2. Pending Members from globalPendingData (add_member)
-            if (userRole === 'admin' && globalPendingData) {
-                globalPendingData.forEach(p => {
-                    if (p.action_type === 'add_member' && p.status === 'pending') {
-                        const payload = JSON.parse(p.payload);
-                        if (payload.family_id == familyId) {
-                            members.push({
-                                id: `pending_mem_${p.id}`,
-                                name: payload.name,
-                                nick_name: payload.nick_name,
-                                relation: payload.relation_to_owner,
-                                is_pending: true
-                            });
-                        }
+            
+            if (members.length > 0) {
+                // Sort by name
+                members.sort((a, b) => a.name.localeCompare(b.name));
+                
+                members.forEach(m => {
+                    if (m.id != excludeMemberId) {
+                        const option = document.createElement('option');
+                        option.value = m.id;
+                        option.textContent = `${m.name} ${m.nick_name ? `(${m.nick_name})` : ''} - [${m.relation_to_owner}]`;
+                        parentSelect.appendChild(option.cloneNode(true));
+                        spouseSelect.appendChild(option.cloneNode(true));
+                        siblingSelect.appendChild(option);
                     }
                 });
             }
-
-            // 3. Special Case: If Family is Pending, add its Initial Owner
-            if (familyId.toString().startsWith('pending_')) {
-                const actionId = familyId.toString().replace('pending_', '');
-                const action = globalPendingData.find(a => a.id == actionId);
-                if (action && action.action_type === 'add_family') {
-                    const payload = JSON.parse(action.payload);
-                    members.push({
-                        id: `pending_owner_${action.id}`,
-                        name: payload.owner_name,
-                        nick_name: '',
-                        relation: 'Self (Owner)',
-                        is_pending: true
-                    });
-                }
-            }
-
-            // Populate the Dropdowns
-            members.forEach(m => {
-                if (m.id != excludeMemberId) {
-                    const option = document.createElement('option');
-                    option.value = m.id;
-                    const label = `${m.name} ${m.nick_name ? `(${m.nick_name})` : ''} - ${m.relation}`;
-                    option.textContent = m.is_pending ? `${label} 🕒 (Pending)` : label;
-                    if (m.is_pending) {
-                        option.style.fontStyle = 'italic';
-                        option.style.color = '#818cf8';
-                    }
-                    
-                    parentSelect.appendChild(option.cloneNode(true));
-                    spouseSelect.appendChild(option.cloneNode(true));
-                    siblingSelect.appendChild(option);
-                }
-            });
         }
 
         function openEditMemberModal(familyId, memberId) {
@@ -1198,7 +1142,7 @@ $username = $_SESSION['username'];
             document.getElementById('nick_name').value = member.nick_name || '';
             document.getElementById('gender').value = member.gender || '';
             
-            const standardRelations = ['Self (Owner)', 'Spouse', 'Child', 'Parent', 'Sibling', 'Niece', 'Grand Child'];
+            const standardRelations = ['Self (Owner)', 'Spouse', 'Child', 'Parent', 'Uncle', 'Aunt', 'Sibling', 'Niece', 'Grand Child'];
             if (standardRelations.includes(member.relation_to_owner)) {
                 document.getElementById('member_relation').value = member.relation_to_owner;
                 document.getElementById('other_relation_group').style.display = 'none';
@@ -1374,139 +1318,190 @@ $username = $_SESSION['username'];
             }
         }
 
-        function renderMemberList() {
-            const family = globalFamiliesData.find(f => f.id == currentViewFamilyId);
-            const content = document.getElementById('viewMembersContent');
-            if (!content) return;
+        function getFamilyMembersWithPending(familyId) {
+            let familyObj = globalFamiliesData.find(f => f.id == familyId);
             
-            let allMembers = [];
-            
-            // 1. Approved Members
-            if (family && family.members) {
-                family.members.forEach(m => {
-                    allMembers.push({ ...m, is_pending: false });
-                });
+            // Reconstruct a temporary shell for new unapproved families so they can still act as valid roots for their pending directory
+            if (!familyObj && String(familyId).startsWith('pending_')) {
+                const actionId = String(familyId).replace('pending_', '');
+                const action = globalPendingData.find(a => a.id == actionId);
+                if (action && action.action_type === 'add_family') {
+                    familyObj = { id: familyId, members: [] };
+                }
             }
+            if (!familyObj) return [];
 
-            // 2. Pending Members (Current Admin's additions)
-            if (userRole === 'admin' && globalPendingData) {
-                globalPendingData.forEach(p => {
-                    if (p.action_type === 'add_member' && p.status === 'pending') {
-                        const payload = JSON.parse(p.payload);
-                        if (payload.family_id == currentViewFamilyId) {
-                            allMembers.push({
-                                id: `pending_mem_${p.id}`,
-                                name: payload.name,
-                                nick_name: payload.nick_name,
-                                gender: payload.gender,
-                                relation_to_owner: payload.relation_to_owner,
-                                parent_member_id: payload.parent_member_id,
-                                spouse_member_id: payload.spouse_member_id,
-                                photo_path: payload.photo_path || '',
-                                blood_group: payload.blood_group,
-                                education: payload.education,
-                                member_job: payload.member_job,
-                                job_details: payload.job_details,
-                                member_marital: payload.member_marital,
-                                spouse_name: payload.spouse_name,
-                                dob_dod: payload.dob_dod,
-                                dob_dod_type: payload.dob_dod_type,
-                                is_pending: true
-                            });
+            let members = JSON.parse(JSON.stringify(familyObj.members || []));
+
+            // Integrate Pending Actions for Admin inline
+            if (userRole === 'admin' && globalPendingData.length > 0) {
+                // Must process oldest first so relationships build properly
+                [...globalPendingData].reverse().forEach(p => {
+                    let payload = {};
+                    try { payload = JSON.parse(p.payload); } catch(e) { return; }
+
+                    if (p.action_type === 'add_member' && payload.family_id == familyId) {
+                        members.push({
+                            id: 'pending_mem_' + p.id,
+                            name: payload.name,
+                            relation_to_owner: payload.relation_to_owner,
+                            nick_name: payload.nick_name || '',
+                            gender: payload.gender || 'Unknown',
+                            marital_status: payload.marital_status || 'Single',
+                            parent_member_id: payload.parent_member_id || null,
+                            spouse_member_id: payload.spouse_member_id || null,
+                            child_type: payload.child_type || '',
+                            photo_path: p.photo_path || null,
+                            blood_group: payload.blood_group || '',
+                            dob_dod_type: payload.dob_dod_type || 'DOB',
+                            dob_dod: payload.dob_dod || '',
+                            mobile_number: payload.mobile_number || '',
+                            education: payload.education || '',
+                            job_status: payload.job_status || '',
+                            job_details: payload.job_details || '',
+                            spouse_name: payload.spouse_name || '',
+                            date_of_marriage: payload.date_of_marriage || '',
+                            in_laws_village: payload.in_laws_village || '',
+                            in_laws_father_name: payload.in_laws_father_name || '',
+                            others: payload.others || '',
+                            is_pending: true,
+                            pending_type: 'Addition'
+                        });
+                    } else if (p.action_type === 'edit_member') {
+                        const target = members.find(m => m.id == p.target_id);
+                        if (target) {
+                            Object.assign(target, payload);
+                            target.is_pending = true;
+                            target.pending_type = 'Update';
+                            if (p.photo_path) target.photo_path = p.photo_path;
+                        }
+                    } else if (p.action_type === 'delete_member') {
+                        const target = members.find(m => m.id == p.target_id);
+                        if (target) {
+                            target.is_pending = true;
+                            target.pending_type = 'Deletion';
                         }
                     }
                 });
             }
-
-            if (allMembers.length === 0) {
-                content.innerHTML = '<div style="text-align:center; padding:3rem; color:var(--text-muted);">No members found in this household yet.</div>';
-                return;
-            }
-
-            let html = '';
-            allMembers.forEach((m) => {
-                let parentNameHtml = '';
-                if (m.parent_member_id) {
-                    const parent = allMembers.find(p => p.id == m.parent_member_id);
-                    if (parent) {
-                        parentNameHtml = `<div style="font-size: 0.85rem; color: #818cf8; margin-top: 0.2rem;">👨‍👦 Parent: ${parent.name}</div>`;
-                    }
-                }
-
-                // Deep Relationship Intelligence
-                let relationsHtml = '';
-                const householdChildren = allMembers.filter(c => c.parent_member_id == m.id);
-                const householdSpouse = m.spouse_member_id ? allMembers.find(sm => sm.id == m.spouse_member_id) : null;
-                const householdSiblings = m.parent_member_id ? allMembers.filter(s => s.parent_member_id == m.parent_member_id && s.id != m.id) : [];
-
-                const grandchildren = [];
-                const inLaws = [];
-                householdChildren.forEach(child => {
-                    const gc = allMembers.filter(c => c.parent_member_id == child.id);
-                    grandchildren.push(...gc);
-                    const spouse = child.spouse_member_id ? allMembers.find(sm => sm.id == child.spouse_member_id) : null;
-                    if (spouse) inLaws.push({ name: spouse.name, type: child.gender === 'Male' ? 'Daughter-in-law' : 'Son-in-law' });
-                });
-
-                if (householdChildren.length > 0 || householdSpouse || householdSiblings.length > 0 || grandchildren.length > 0 || inLaws.length > 0) {
-                    relationsHtml = `
-                    <div style="margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.4rem;">
-                        ${householdSpouse ? `<span style="background: rgba(244, 63, 94, 0.1); color: #fb7185; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">💍 Spouse: ${householdSpouse.name}</span>` : ''}
-                        ${householdChildren.map(c => `<span style="background: rgba(34, 197, 94, 0.1); color: #4ade80; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">👶 Child: ${c.name}</span>`).join('')}
-                        ${householdSiblings.map(s => `<span style="background: rgba(129, 140, 248, 0.1); color: #818cf8; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🤝 Sibling: ${s.name}</span>`).join('')}
-                        ${grandchildren.map(g => `<span style="background: rgba(245, 158, 11, 0.1); color: #fbbf24; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🧑‍🍼 Grandchild: ${g.name}</span>`).join('')}
-                        ${inLaws.map(il => `<span style="background: rgba(168, 85, 247, 0.1); color: #c084fc; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🏠 ${il.type}: ${il.name}</span>`).join('')}
-                    </div>`;
-                }
-
-                const memberPhoto = m.photo_path ? `<img src="${m.photo_path}" style="width: 50px; height: 50px; border-radius: 50%; object-fit: cover; border: 2px solid ${m.is_pending ? '#818cf8' : 'var(--primary)'};">` : `
-                    <div style="width: 50px; height: 50px; border-radius: 50%; background: ${m.is_pending ? 'rgba(129, 140, 248, 0.3)' : 'rgba(129, 140, 248, 0.2)'}; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; color: #818cf8; border: 1px solid rgba(129, 140, 248, 0.3);">
-                        ${m.name.charAt(0)}
-                    </div>
-                `;
-
-                const pendingBadge = m.is_pending ? `<span class="result-badge member" style="margin-left: 0.5rem; font-size: 0.65rem; padding: 2px 8px; border-radius: 99px; background: rgba(129, 140, 248, 0.2); color: #818cf8; text-transform: uppercase;">🕒 Pending Approval</span>` : '';
-                const cardStyle = m.is_pending ? 'border: 1px dashed #818cf8; background: rgba(129, 140, 248, 0.05);' : 'border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05);';
-
-                html += `
-                <div class="member-detail-card" style="${cardStyle} border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.8rem;">
-                        <div style="display: flex; gap: 1rem; align-items: center;">
-                            ${memberPhoto}
-                            <div>
-                                <h4 style="margin: 0; font-size: 1.2rem; color: var(--primary);">${m.name} ${m.nick_name ? `<span style="color: var(--text-muted); font-size: 0.9rem;">(${m.nick_name})</span>` : ''} ${pendingBadge}</h4>
-                                <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.2rem;">
-                                    👤 ${m.relation_to_owner} ${m.child_type ? `• ${m.child_type}` : ''}
-                                </div>
-                                ${parentNameHtml}
-                                ${relationsHtml}
-                            </div>
-                        </div>
-                        ${(userRole === 'admin' || userRole === 'super_admin') ? `
-                            <div style="display: flex; gap: 0.5rem;">
-                                <button class="btn-sm btn-outline" onclick="closeModal('viewMembersModal'); openEditMemberModal('${currentViewFamilyId}', '${m.id}')">Edit Profile</button>
-                                <button class="btn-sm btn-outline btn-danger" onclick="deleteMember('${m.id}')">Delete</button>
-                            </div>
-                        ` : ''}
-                    </div>
-                    
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; font-size: 0.9rem;">
-                        ${m.blood_group ? `<div>🩸 <strong>Blood Group:</strong> <span style="color: #ef4444; font-weight: bold;">${m.blood_group}</span></div>` : ''}
-                        ${m.dob_dod ? `<div>📅 <strong>${m.dob_dod_type || 'Born'}:</strong> ${m.dob_dod}</div>` : ''}
-                        ${m.mobile_number ? `<div>📱 <strong>Mobile:</strong> ${m.mobile_number}</div>` : ''}
-                        ${m.education ? `<div>🎓 <strong>Education:</strong> ${m.education}</div>` : ''}
-                        ${m.marital_status ? `<div>💍 <strong>Status:</strong> ${m.marital_status}</div>` : ''}
-                        ${m.job_status ? `<div>💼 <strong>Job Status:</strong> ${m.job_status}</div>` : ''}
-                    </div>
-                </div>
-                `;
-            });
-            content.innerHTML = html;
+            return members;
         }
 
+        function renderMemberList() {
+            const family = globalFamiliesData.find(f => f.id == currentViewFamilyId);
+            if(!family) return;
+            const enhancedMembers = getFamilyMembersWithPending(currentViewFamilyId);
+            const content = document.getElementById('viewMembersContent');
+            
+            let html = '';
+            if(enhancedMembers && enhancedMembers.length > 0) {
+                enhancedMembers.forEach((m, index) => {
+                    let parentNameHtml = '';
+                    if (m.parent_member_id) {
+                        const parent = enhancedMembers.find(p => p.id == m.parent_member_id);
+                        if (parent) {
+                            parentNameHtml = `<div style="font-size: 0.85rem; color: #818cf8; margin-top: 0.2rem;">👨‍👦 Parent: ${parent.name}</div>`;
+                        }
+                    }
 
-        // Member rendering logic completed above.
+                    // Deep Relationship Intelligence (Within this household)
+                    let relationsHtml = '';
+                    const householdChildren = enhancedMembers.filter(c => c.parent_member_id == m.id);
+                    
+                    // Spouse: Find bidirectionally ensure we don't match self
+                    const householdSpouse = enhancedMembers.find(sm => sm.id !== m.id && (sm.spouse_member_id == m.id || m.spouse_member_id == sm.id));
+                    
+                    // Siblings: Same parent (biological)
+                    const householdSiblings = m.parent_member_id ? 
+                        enhancedMembers.filter(s => s.parent_member_id == m.parent_member_id && s.id != m.id) : [];
 
+                    // Grandchildren and In-Laws
+                    const grandchildren = [];
+                    const inLaws = [];
+                    householdChildren.forEach(child => {
+                        // Find child's children (grandchildren of m)
+                        const gc = enhancedMembers.filter(c => c.parent_member_id == child.id);
+                        grandchildren.push(...gc);
+                        
+                        // Find child's spouse (son/daughter in law of m)
+                        const spouse = enhancedMembers.find(sm => sm.id !== child.id && (sm.spouse_member_id == child.id || child.spouse_member_id == sm.id));
+                        if (spouse) inLaws.push({ name: spouse.name, type: child.gender === 'Male' ? 'Daughter-in-law' : 'Son-in-law' });
+                    });
+
+                    // Uncles/Aunts: Any members claiming to be Uncle/Aunt
+                    const householdUncles = enhancedMembers.filter(u => u.relation_to_owner === 'Uncle' || u.relation_to_owner === 'Aunt');
+
+                    if (householdChildren.length > 0 || householdSpouse || householdSiblings.length > 0 || grandchildren.length > 0 || inLaws.length > 0 || householdUncles.length > 0) {
+                        relationsHtml = `
+                        <div style="margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.4rem;">
+                            ${householdSpouse ? `<span style="background: rgba(244, 63, 94, 0.1); color: #fb7185; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">💍 Spouse: ${householdSpouse.name}</span>` : ''}
+                            ${householdUncles.map(u => `<span style="background: rgba(14, 165, 233, 0.1); color: #0ea5e9; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">👴 ${u.relation_to_owner}: ${u.name}</span>`).join('')}
+                            ${householdChildren.map(c => `<span style="background: rgba(34, 197, 94, 0.1); color: #4ade80; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">👶 Child: ${c.name}</span>`).join('')}
+                            ${householdSiblings.map(s => `<span style="background: rgba(129, 140, 248, 0.1); color: #818cf8; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🤝 Sibling: ${s.name}</span>`).join('')}
+                            ${grandchildren.map(g => `<span style="background: rgba(245, 158, 11, 0.1); color: #fbbf24; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🧑‍🍼 Grandchild: ${g.name}</span>`).join('')}
+                            ${inLaws.map(il => `<span style="background: rgba(168, 85, 247, 0.1); color: #c084fc; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🏠 ${il.type}: ${il.name}</span>`).join('')}
+                        </div>`;
+                    }
+
+                    const memberPhoto = m.photo_path ? `<img src="${m.photo_path}" style="width: 50px; height: 50px; border-radius: 50%; object-fit: cover; border: 2px solid var(--primary);">` : `
+                        <div style="width: 50px; height: 50px; border-radius: 50%; background: rgba(129, 140, 248, 0.2); display: flex; align-items: center; justify-content: center; font-size: 1.2rem; color: #818cf8; border: 1px solid rgba(129, 140, 248, 0.3);">
+                            ${m.name.charAt(0)}
+                        </div>
+                    `;
+
+                    html += `
+                    <div class="member-detail-card" style="background: rgba(255,255,255,0.05); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; border: 1px solid rgba(255,255,255,0.1);">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.8rem;">
+                            <div style="display: flex; gap: 1rem; align-items: center;">
+                                ${memberPhoto}
+                                <div>
+                                    <h4 style="margin: 0; font-size: 1.2rem; color: var(--primary);">${m.name} ${m.nick_name ? `<span style="color: var(--text-muted); font-size: 0.9rem;">(${m.nick_name})</span>` : ''} ${m.is_pending ? `<span style="background: rgba(245, 158, 11, 0.2); color: #d97706; font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 4px; margin-left: 0.5rem; font-weight: bold; vertical-align: middle;">⏳ Pending ${m.pending_type}</span>` : ''}</h4>
+                                    <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.2rem;">
+                                        👤 ${m.relation_to_owner} ${m.child_type ? `• ${m.child_type}` : ''}
+                                    </div>
+                                    ${parentNameHtml}
+                                    ${relationsHtml}
+                                </div>
+                            </div>
+                            ${(userRole === 'admin' || userRole === 'super_admin') ? `
+                                <div style="display: flex; gap: 0.5rem;">
+                                    <button class="btn-sm btn-outline" onclick="closeModal('viewMembersModal'); openEditMemberModal('${family.id}', '${m.id}')">Edit Profile</button>
+                                    <button class="btn-sm btn-outline btn-danger" onclick="deleteMember('${m.id}')">Delete</button>
+                                </div>
+                            ` : ''}
+                        </div>
+                        
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; font-size: 0.9rem;">
+                            ${m.blood_group ? `<div>🩸 <strong>Blood Group:</strong> <span style="color: #ef4444; font-weight: bold;">${m.blood_group}</span></div>` : ''}
+                            ${m.dob_dod ? `<div>📅 <strong>${m.dob_dod_type || 'DOB'}:</strong> ${m.dob_dod}</div>` : ''}
+                            ${m.mobile_number ? `<div>📱 <strong>Mobile:</strong> ${m.mobile_number}</div>` : ''}
+                            ${m.education ? `<div>🎓 <strong>Education:</strong> ${m.education}</div>` : ''}
+                            ${m.marital_status ? `<div>💍 <strong>Status:</strong> ${m.marital_status}</div>` : ''}
+                            ${m.job_status ? `<div>💼 <strong>Job Status:</strong> ${m.job_status}</div>` : ''}
+                        </div>
+
+                        ${m.job_details ? `<div style="margin-top: 0.8rem; padding-top: 0.8rem; border-top: 1px dashed rgba(255,255,255,0.1); font-size: 0.9rem;">📝 <strong>Job Details:</strong> ${m.job_details}</div>` : ''}
+                        
+                        ${m.marital_status === 'Married' ? `
+                        <div style="margin-top: 1rem; background: rgba(129, 140, 248, 0.1); padding: 1rem; border-radius: 8px;">
+                            <div style="font-weight: 600; color: #818cf8; margin-bottom: 0.5rem; font-size: 0.85rem; text-transform: uppercase;">Marital Information</div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size: 0.85rem;">
+                                <div>🤝 <strong>Spouse:</strong> ${m.spouse_name || 'N/A'}</div>
+                                <div>📆 <strong>Marriage Date:</strong> ${m.date_of_marriage || 'N/A'}</div>
+                                <div>🏙️ <strong>In-law's Village:</strong> ${m.in_laws_village || 'N/A'}</div>
+                                <div>🧔 <strong>In-law's Father:</strong> ${m.in_laws_father_name || 'N/A'}</div>
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${m.others ? `<div style="margin-top: 1rem; color: #94a3b8; font-style: italic; font-size: 0.85rem; padding: 0.5rem; background: rgba(255,255,255,0.03); border-radius: 4px;">📝 Note: ${m.others}</div>` : ''}
+                    </div>`;
+                });
+            } else {
+                html = '<div style="color:var(--text-muted); text-align: center; padding: 3rem;">No member data found for this family.</div>';
+            }
+            content.innerHTML = html;
+        }
 
         async function exportToPDF() {
             const { jsPDF } = window.jspdf;
@@ -1593,52 +1588,113 @@ $username = $_SESSION['username'];
         function renderFamilyTree() {
             const currentFamily = globalFamiliesData.find(f => f.id == currentViewFamilyId);
             const content = document.getElementById('viewMembersContent');
-            if (!content) return;
+            if (!currentFamily || !currentFamily.members) return;
 
-            // Combine Live and Pending Members for Tree Tracing
-            let allVillageMembers = globalFamiliesData.flatMap(f => f.members || []);
-            if (userRole === 'admin' && globalPendingData) {
-                globalPendingData.forEach(p => {
-                    if (p.action_type === 'add_member' && p.status === 'pending') {
-                        const payload = JSON.parse(p.payload);
-                        allVillageMembers.push({
-                            id: `pending_mem_${p.id}`,
-                            name: payload.name,
-                            family_id: payload.family_id,
-                            parent_member_id: payload.parent_member_id,
-                            relation_to_owner: payload.relation_to_owner,
-                            is_pending: true
-                        });
-                    }
-                });
-            }
-
-            const owner = allVillageMembers.find(m => m.family_id == currentViewFamilyId && m.relation_to_owner === 'Self (Owner)');
+            // Deep clone and seamlessly inject pending members universally so the tree accounts for unapproved insertions
+            const allVillageMembers = globalFamiliesData.flatMap(f => getFamilyMembersWithPending(f.id));
+            
+            // Re-find owner in cloned array
+            const clonedCurrentFamilyMembers = allVillageMembers.filter(m => m.family_id == currentFamily.id);
+            const owner = clonedCurrentFamilyMembers.find(m => m.relation_to_owner === 'Self (Owner)');
             if (!owner) {
                 content.innerHTML = '<div style="color:var(--text-muted); text-align: center; padding: 3rem;">House Owner not found.</div>';
                 return;
             }
 
-            let absoluteRoot = owner;
-            let iterations = 0;
-            while (iterations < 50) { 
-                let parent = allVillageMembers.find(m => m.id == absoluteRoot.parent_member_id);
-                
-                if (!parent) {
-                    const memFamily = globalFamiliesData.find(f => f.id == absoluteRoot.family_id);
-                    if (memFamily && memFamily.origin_member_id) {
-                        parent = allVillageMembers.find(m => m.id == memFamily.origin_member_id);
+            // Phase 1: Universal Root Discovery (Household-Comprehensive)
+            const findAbsoluteRoot = (member) => {
+                let current = member;
+                let iterations = 0;
+                while (iterations < 50) {
+                    let parent = allVillageMembers.find(m => String(m.id) === String(current.parent_member_id));
+                    if (!parent) {
+                        const memFamily = globalFamiliesData.find(f => f.id == current.family_id);
+                        if (memFamily && memFamily.origin_member_id) {
+                            parent = allVillageMembers.find(m => String(m.id) === String(memFamily.origin_member_id));
+                        }
+                        if (!parent) {
+                            // If this household has an explicit "Parent" relation, link to them
+                            parent = currentFamily.members.find(m => m.relation_to_owner === 'Parent' && String(m.id) !== String(current.id));
+                        }
+                        if (!parent && memFamily && memFamily.owner_father_name && current.relation_to_owner === 'Self (Owner)') {
+                            const fatherName = memFamily.owner_father_name.trim();
+                            parent = allVillageMembers.find(m => m.name.trim().toLowerCase() === fatherName.toLowerCase());
+                        }
                     }
+                    if (parent) { current = parent; iterations++; } else break;
                 }
+                return current;
+            };
 
-                if (parent) {
-                    absoluteRoot = parent;
-                } else {
-                    break;
-                }
-                iterations++;
+            // Analyze all household members and find the most senior common root
+            const candidateRoots = clonedCurrentFamilyMembers.map(m => findAbsoluteRoot(m));
+            const distinctRootsMap = new Map();
+            candidateRoots.forEach(r => distinctRootsMap.set(String(r.id), r));
+            const distinctRoots = Array.from(distinctRootsMap.values());
+
+            // Prioritize 'Parent' or 'GrandParent' types if multiple branches exist
+            let absoluteRoot = distinctRoots.find(r => r.relation_to_owner === 'Parent') || distinctRoots[0] || owner;
+            
+            // Identify Uncles and Aunts
+            const hasUnclesOrAunts = distinctRoots.some(r => r.relation_to_owner === 'Uncle' || r.relation_to_owner === 'Aunt');
+            let actualTreeRoot = absoluteRoot;
+
+            if (hasUnclesOrAunts) {
+                // If there are uncles/aunts, they must be siblings of the absoluteRoot (the Parent)
+                // We create a virtual grandparent to bind both the Parent and the Uncles to the same level
+                const virtualGrandparentId = 'virtual_gp_' + absoluteRoot.id;
+                const virtualGrandparent = {
+                    id: virtualGrandparentId,
+                    name: "Ancestors",
+                    relation_to_owner: "Grandparent",
+                    gender: "Other",
+                    parent_member_id: null,
+                    is_virtual: true
+                };
+                allVillageMembers.push(virtualGrandparent);
+                
+                absoluteRoot.parent_member_id = virtualGrandparentId;
+                actualTreeRoot = virtualGrandparent;
+
+                distinctRoots.forEach(r => {
+                    if (r.relation_to_owner === 'Uncle' || r.relation_to_owner === 'Aunt') {
+                        r.parent_member_id = virtualGrandparentId;
+                    }
+                });
             }
 
+            // Critical Binding: Connect remaining disconnected branches
+            distinctRoots.forEach(r => {
+                if (String(r.id) !== String(actualTreeRoot.id) && !r.parent_member_id) {
+                    if (r.relation_to_owner === 'Sibling') {
+                        // Sibling needs a Virtual Parent to be parallel to the owner
+                        if (owner.parent_member_id) {
+                            r.parent_member_id = owner.parent_member_id;
+                        } else {
+                            const virtualParentId = 'virtual_p_' + owner.id;
+                            let virtualParent = allVillageMembers.find(m => m.id === virtualParentId);
+                            if (!virtualParent) {
+                                virtualParent = {
+                                    id: virtualParentId,
+                                    name: "Unknown Parent",
+                                    relation_to_owner: "Parent",
+                                    gender: "Other",
+                                    parent_member_id: actualTreeRoot.id !== owner.id ? actualTreeRoot.id : null,
+                                    is_virtual: true
+                                };
+                                allVillageMembers.push(virtualParent);
+                                owner.parent_member_id = virtualParent.id;
+                                if (actualTreeRoot.id === owner.id) {
+                                    actualTreeRoot = virtualParent;
+                                }
+                            }
+                            r.parent_member_id = virtualParent.id;
+                        }
+                    } else {
+                        r.parent_member_id = actualTreeRoot.id;
+                    }
+                }
+            });
 
             // Phase 2: Trigger React Rendering
             content.innerHTML = `
@@ -1649,7 +1705,6 @@ $username = $_SESSION['username'];
             `;
             
             const mount = document.getElementById('premium-tree-mount');
-            // ... (Drag to scroll logic stays same)
             let isDown = false;
             let startX, startY, scrollLeft, scrollTop;
 
@@ -1674,9 +1729,8 @@ $username = $_SESSION['username'];
                 mount.scrollTop = scrollTop - walkY;
             });
 
-            // This global function is defined in the Babel script below
             if (window.renderReactTree) {
-                window.renderReactTree(absoluteRoot, allVillageMembers, currentViewFamilyId);
+                window.renderReactTree(actualTreeRoot, allVillageMembers, currentViewFamilyId);
             }
         }
 
@@ -1690,15 +1744,21 @@ $username = $_SESSION['username'];
         }
 
         document.getElementById('member_relation').addEventListener('change', function() {
+            const parentLabel = document.querySelector('label[for="parent_member_id"]') || document.querySelector('#parent_member_group label');
+            
             if (this.value === 'Child') {
                 document.getElementById('child_type_group').style.display = 'block';
+                if (parentLabel) parentLabel.textContent = "Father's / Parent's Name (Registered Member)";
+            } else if (this.value === 'Parent') {
+                document.getElementById('child_type_group').style.display = 'none';
+                if (parentLabel) parentLabel.textContent = "Parent of which Member? (Link to Child)";
             } else {
                 document.getElementById('child_type_group').style.display = 'none';
                 document.getElementById('child_type').value = '';
+                if (parentLabel) parentLabel.textContent = "Father's / Parent's Name (Registered Member)";
             }
 
-            // Show parent dropdown for Self (Owner), Child, Niece, Grand Child, or Other
-            const needsParent = ['Self (Owner)', 'Child', 'Niece', 'Grand Child', 'Other'];
+            const needsParent = ['Self (Owner)', 'Child', 'Niece', 'Grand Child', 'Parent', 'Uncle', 'Aunt', 'Spouse', 'Other'];
             if (needsParent.includes(this.value)) {
                 document.getElementById('parent_member_group').style.display = 'block';
             } else {
@@ -1706,7 +1766,6 @@ $username = $_SESSION['username'];
                 document.getElementById('parent_member_id').value = '';
             }
 
-            // Show spouse dropdown for Spouse, Son-in-law, or Daughter-in-law
             const needsSpouse = ['Spouse', 'Son-in-law', 'Daughter-in-law'];
             if (needsSpouse.includes(this.value)) {
                 document.getElementById('spouse_member_group').style.display = 'block';
@@ -1715,12 +1774,40 @@ $username = $_SESSION['username'];
                 document.getElementById('spouse_member_id').value = '';
             }
 
-            // Sibling logic
             if (this.value === 'Sibling') {
                 document.getElementById('sibling_member_group').style.display = 'block';
+                document.getElementById('parent_member_group').style.display = 'block';
+                if (parentLabel) parentLabel.textContent = "Father's / Parent's Name (Registered Member)";
             } else {
                 document.getElementById('sibling_member_group').style.display = 'none';
                 document.getElementById('sibling_member_id').value = '';
+            }
+        });
+
+        // Auto-inherit parent when sibling is selected
+        document.getElementById('sibling_member_id').addEventListener('change', function() {
+            const siblingId = this.value;
+            if (!siblingId) return;
+            
+            // Try to find sibling's parent in global data
+            let parentId = null;
+            globalFamiliesData.forEach(f => {
+                const sibling = f.members?.find(m => m.id == siblingId);
+                if (sibling) parentId = sibling.parent_member_id;
+            });
+            
+            if (!parentId) {
+                // If not in live data, check pending data
+                const sAction = globalPendingData.find(a => a.id == siblingId.replace('pending_mem_', ''));
+                if (sAction) {
+                    const p = JSON.parse(sAction.payload);
+                    parentId = p.parent_member_id;
+                }
+            }
+            
+            if (parentId) {
+                document.getElementById('parent_member_id').value = parentId;
+                showToast("🧬 Parent linked automatically from sibling.", "success");
             }
         });
 
@@ -1878,6 +1965,19 @@ $username = $_SESSION['username'];
         });
 
         async function deleteFamily(id) {
+            if (String(id).startsWith('pending_')) {
+                if(!confirm("Are you sure you want to discard this pending family request?")) return;
+                const pId = String(id).replace('pending_', '');
+                const res = await apiCall('delete_pending_action', { pending_id: pId });
+                if(res.status === 'success') {
+                    showToast("Pending family request discarded successfully", "success");
+                    loadFamilies();
+                } else {
+                    alert(res.message);
+                }
+                return;
+            }
+
             if(!confirm("Are you sure you want to delete this family?")) return;
             const res = await apiCall('delete_family', { id });
             if(res.status === 'success' || res.status === 'pending') {
@@ -1893,6 +1993,24 @@ $username = $_SESSION['username'];
         }
 
         async function deleteMember(id) {
+            if (String(id).startsWith('pending_mem_')) {
+                if(!confirm("Are you sure you want to discard this pending member request?")) return;
+                const pId = String(id).replace('pending_mem_', '');
+                const res = await apiCall('delete_pending_action', { pending_id: pId });
+                if(res.status === 'success') {
+                    showToast("Pending member request discarded successfully", "success");
+                    loadFamilies();
+                    const viewModal = document.getElementById('viewMembersModal');
+                    if (viewModal.classList.contains('active')) {
+                        if (currentMemberView === 'list') renderMemberList();
+                        else renderFamilyTree();
+                    }
+                } else {
+                    alert(res.message);
+                }
+                return;
+            }
+
             if(!confirm("Are you sure you want to delete this family member?")) return;
             const res = await apiCall('delete_member', { id });
             if(res.status === 'success' || res.status === 'pending') {
@@ -1986,7 +2104,7 @@ $username = $_SESSION['username'];
             
             // Integrate Pending Actions for Admin
             if (userRole === 'admin' && globalPendingData.length > 0) {
-                globalPendingData.forEach(p => {
+                [...globalPendingData].reverse().forEach(p => {
                     let payload = {};
                     try { payload = JSON.parse(p.payload); } catch(e) { return; }
                     
@@ -2068,7 +2186,7 @@ $username = $_SESSION['username'];
                             <div class="member-header" style="display: flex; justify-content: space-between; align-items: center;">
                                 <div>
                                     <span class="member-name">${m.name} ${m.nick_name ? `(${m.nick_name})` : ''} ${mPendingBadge}</span>
-                                    <span class="member-relation" style="display:block; font-size:0.75rem; color:var(--primary); margin-top:0.2rem;">${m.relation_to_owner} ${m.child_type ? `(${m.child_type})` : ''}</span>
+                                    <span class="member-relation">${m.relation_to_owner} ${m.child_type ? `(${m.child_type})` : ''}</span>
                                 </div>
                                 ${(userRole === 'admin' || userRole === 'super_admin') ? `
                                     <div style="display: flex; gap: 0.3rem;">
@@ -2113,7 +2231,7 @@ $username = $_SESSION['username'];
 
                 const viewMembersBtn = (f.members && f.members.length > 0) ? `
                     <div style="text-align: center; margin-top: 1rem;">
-                        <button class="btn-sm btn-outline toggle-members-btn" onclick="openViewMembersModal(${f.id})">View Detailed Members List (${f.members.length})</button>
+                        <button class="btn-sm btn-outline toggle-members-btn" onclick="openViewMembersModal('${f.id}')">View Detailed Members List (${f.members.length})</button>
                     </div>
                 ` : '';
 
@@ -2242,28 +2360,13 @@ $username = $_SESSION['username'];
             window.print();
         }
 
-        // Navigation & Sidebar
-        function toggleSidebar() {
-            const sidebar = document.querySelector('.sidebar');
-            const overlay = document.getElementById('sidebarOverlay');
-            if (sidebar) sidebar.classList.toggle('active');
-            if (overlay) overlay.classList.toggle('active');
-        }
-
         // User Management & View Switching Logic
         let currentView = 'home';
 
         function switchMainView(view) {
             currentView = view;
-            localStorage.setItem('shidhlajury_last_view', view);
-            
-            // Close sidebar on mobile after navigation
-            if (window.innerWidth < 1024) {
-                const sidebar = document.querySelector('.sidebar');
-                const overlay = document.getElementById('sidebarOverlay');
-                if (sidebar) sidebar.classList.remove('active');
-                if (overlay) overlay.classList.remove('active');
-            }
+            localStorage.setItem('activeDashboardTab', view);
+            document.documentElement.setAttribute('data-active-view', view); // Sycn FOUC layout breaker
             const homeView       = document.getElementById('homePortfolioWrapper');
             const analyticsView  = document.getElementById('analyticsView');
             const mapView        = document.getElementById('mapView');
@@ -2773,89 +2876,7 @@ $username = $_SESSION['username'];
             if (container && dropdown && !container.contains(e.target)) {
                 dropdown.classList.remove('active');
             }
-
-            // Close search results on click outside
-            const sContainer = document.querySelector('.search-container');
-            const sDropdown = document.getElementById('searchDropdown');
-            if (sContainer && sDropdown && !sContainer.contains(e.target)) {
-                sDropdown.classList.remove('active');
-            }
         });
-
-        // ── Global Search Handling ─────────────────────
-        function handleGlobalSearch(q) {
-            const dropdown = document.getElementById('searchDropdown');
-            if (!q || q.length < 2) {
-                dropdown.classList.remove('active');
-                if (currentView === 'families' && window.renderFamilies) renderFamilies(q);
-                return;
-            }
-
-            let results = [];
-            let query = q.toLowerCase();
-
-            globalFamiliesData.forEach(f => {
-                let matchType = '';
-                let matchMain = '';
-                let matchSub  = '';
-
-                // Match Family Name or Owner
-                if (f.family_name?.toLowerCase().includes(query) || f.house_owner_name?.toLowerCase().includes(query)) {
-                    results.push({
-                        id: f.id,
-                        title: f.family_name || f.house_owner_name,
-                        sub: `Owner: ${f.house_owner_name} | Area: ${f.area}`,
-                        type: 'family'
-                    });
-                }
-
-                // Match Members
-                if (f.members) {
-                    f.members.forEach(m => {
-                        if (m.name?.toLowerCase().includes(query)) {
-                            results.push({
-                                id: f.id, // Point to the family
-                                title: m.name,
-                                sub: `Member of ${f.family_name || f.house_owner_name} | Role: ${m.relation_to_owner || 'Member'}`,
-                                type: 'member'
-                            });
-                        }
-                    });
-                }
-            });
-
-            // If we are in the families view, we still want to filter the grid
-            if (currentView === 'families' && window.renderFamilies) renderFamilies(q);
-
-            if (results.length === 0) {
-                dropdown.innerHTML = '<div style="padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">No matches found</div>';
-            } else {
-                dropdown.innerHTML = results.slice(0, 10).map(r => `
-                    <div class="search-result-item" onclick="navigateToFamily(${r.id})">
-                        <div class="result-main">
-                            <span class="result-title">${r.title}</span>
-                            <span class="result-sub">${r.sub}</span>
-                        </div>
-                        <span class="result-badge ${r.type}">${r.type}</span>
-                    </div>
-                `).join('');
-            }
-            dropdown.classList.add('active');
-        }
-
-        async function navigateToFamily(fid) {
-            document.getElementById('searchDropdown').classList.remove('active');
-            document.getElementById('globalSearch').value = '';
-
-            // Switch view if not already in families
-            if (currentView !== 'families') {
-                switchMainView('families');
-                // Give it a small delay for the DOM to update
-                setTimeout(() => scrollToFamily(fid), 300);
-            } else {
-                scrollToFamily(fid);
-            }
-        }
 
         // ── Analytics Module ──────────────────────────
         let analyticsCharts = {};
@@ -3154,8 +3175,8 @@ $username = $_SESSION['username'];
 
         // Initialize (Restored to standard script block for immediate execution)
         window.addEventListener('DOMContentLoaded', () => {
-            const lastView = localStorage.getItem('shidhlajury_last_view') || 'home';
-            switchMainView(lastView);
+            const savedView = localStorage.getItem('activeDashboardTab') || 'home';
+            switchMainView(savedView);
             loadFamilies();
             startPolling();
         });
@@ -3175,24 +3196,33 @@ $username = $_SESSION['username'];
             const avatarUrl = member.photo ? `uploads/${member.photo}` : 
                             `https://api.dicebear.com/7.x/avataaars/svg?seed=${member.id}&gender=${member.gender === 'Female' ? 'female' : 'male'}`;
 
-            const isPendingNode = member.is_pending;
-            const badgeLabel = isPendingNode ? '🕒 PENDING' : (member.relation_to_owner || 'Member');
-
+            const isVirtual = member.isVirtual;
+            
             return (
-                <div className="tw-flex tw-flex-col tw-items-center">
+                <div className={`tw-flex tw-flex-col tw-items-center ${isVirtual ? 'tw-opacity-90' : ''}`}>
                     <div 
-                        className={`tw-cursor-default tw-w-16 tw-h-16 tw-rounded-full tw-bg-white tw-shadow-md tw-overflow-hidden ${ringClass} ${isPendingNode ? 'tw-border-dashed tw-border-indigo-400' : ''}`}
-                        title={isPendingNode ? "Pending Approval" : ""}
+                        className={`tw-cursor-default tw-rounded-full tw-shadow-md tw-overflow-hidden ${ringClass} ${
+                            isVirtual ? 'tw-w-12 tw-h-12 tw-bg-amber-100 tw-border-amber-400 tw-border-2' : 'tw-w-16 tw-h-16 tw-bg-white'
+                        }`}
+                        title={isVirtual ? "Virtual Ancestor for Grouping" : ""}
                     >
-                        <img src={avatarUrl} alt={member.name} className="tw-w-full tw-h-full tw-object-cover" />
+                        {isVirtual ? (
+                            <div className="tw-w-full tw-h-full tw-flex tw-items-center tw-justify-center tw-text-amber-600 tw-text-xl">🏛️</div>
+                        ) : (
+                            <img src={avatarUrl} alt={member.name} className="tw-w-full tw-h-full tw-object-cover" />
+                        )}
                     </div>
                     
                     <div className="tw-mt-2 tw-text-center">
-                        <div className={`tw-px-3 tw-py-1 tw-rounded-full tw-border tw-shadow-sm ${isPendingNode ? 'tw-bg-indigo-900 tw-text-white tw-border-indigo-500' : 'tw-bg-indigo-50/80 tw-backdrop-blur-sm tw-border-indigo-100'}`}>
-                            <div className={`tw-font-black tw-text-[0.8rem] tw-leading-tight ${isPendingNode ? 'tw-text-white' : 'tw-text-indigo-900'}`}>
-                                {isPendingNode ? "🕒 PENDING" : member.name}
-                            </div>
-                            {isPendingNode && <div className="tw-text-[0.65rem] tw-font-bold tw-text-indigo-200">{member.name}</div>}
+                        <div className={`tw-backdrop-blur-sm tw-px-3 tw-py-1 tw-rounded-full tw-border tw-shadow-sm ${
+                            isVirtual ? 'tw-bg-amber-50/80 tw-border-amber-100' : 'tw-bg-indigo-50/80 tw-border-indigo-100'
+                        }`}>
+                            <div className={`tw-font-black tw-text-[0.95rem] tw-leading-tight tw-tracking-tight ${
+                                isVirtual ? 'tw-text-amber-900' : 'tw-text-indigo-900'
+                            }`}>{member.name}</div>
+                            <div className={`tw-text-[0.65rem] tw-font-bold tw-uppercase tw-tracking-widest tw-mt-1 ${
+                                isVirtual ? 'tw-text-amber-500' : 'tw-text-indigo-500'
+                            }`}>{role}</div>
                         </div>
                     </div>
                 </div>
@@ -3207,13 +3237,15 @@ $username = $_SESSION['username'];
             if (spouseMember) processedIds.add(spouseMember.id);
 
             // Find children in same family OR cross-family branches
-            let children = allMembers.filter(m => m.parent_member_id == member.id);
+            // Use string comparison to avoid type mismatch issues
+            let children = allMembers.filter(m => String(m.parent_member_id) === String(member.id));
             
-            // Find Virtual Children (Branch Roots)
+            // Fuzzy Find: If this is an old model where parent_member_id isn't yet set, 
+            // but children have 'Self (Owner)' relationship and match father name
             globalFamiliesData.forEach(f => {
-                if (f.origin_member_id == member.id) {
+                if (f.origin_member_id == member.id || (f.owner_father_name && f.owner_father_name.trim().toLowerCase() === member.name.trim().toLowerCase())) {
                     const branchRoot = f.members?.find(m => m.relation_to_owner === 'Self (Owner)');
-                    if (branchRoot && !children.some(c => c.id == branchRoot.id)) {
+                    if (branchRoot && branchRoot.id != member.id && !children.some(c => c.id == branchRoot.id)) {
                         children.push(branchRoot);
                     }
                 }
