@@ -1,0 +1,44 @@
+/* Dashboard Specific Styles */
+.lineage-link:hover {
+    background: rgba(129, 140, 248, 0.15) !important;
+    border-color: var(--primary) !important;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(79, 70, 229, 0.1);
+}
+
+.highlight-family {
+    animation: pulse-border 2s ease-in-out;
+}
+
+@keyframes pulse-border {
+    0% { border-color: rgba(255, 255, 255, 0.1); box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); }
+    50% { border-color: var(--primary); box-shadow: 0 0 20px 5px rgba(79, 70, 229, 0.3); }
+    100% { border-color: rgba(255, 255, 255, 0.1); box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); }
+}
+
+.member-detail-card {
+    transition: all 0.3s ease;
+}
+
+.member-detail-card:hover {
+    border-color: rgba(129, 140, 248, 0.4) !important;
+    background: rgba(255, 255, 255, 0.08) !important;
+}
+
+.premium-tree-container {
+    background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
+    border-radius: 24px;
+    box-shadow: inset 0 0 100px rgba(0,0,0,0.5);
+}
+
+/* FOUC layout breaker sync */
+html:not([data-active-view="home"]) body #homePortfolioWrapper { display: none !important; }
+html:not([data-active-view="analytics"]) body #analyticsView { display: none !important; }
+html:not([data-active-view="map"]) body #mapView { display: none !important; }
+html:not([data-active-view="newsfeed"]) body #newsfeedView { display: none !important; }
+html:not([data-active-view="families"]) body #familiesDirectoryHeader,
+html:not([data-active-view="families"]) body #familiesGrid,
+html:not([data-active-view="families"]) body .filter-container { display: none !important; }
+html:not([data-active-view="users"]) body #userManagementView { display: none !important; }
+html:not([data-active-view="approvals"]) body #approvalQueueView { display: none !important; }
+html:not([data-active-view="bin"]) body #recycleBinView { display: none !important; }

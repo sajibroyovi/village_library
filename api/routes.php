@@ -1,6 +1,6 @@
 <?php
 session_start();
-require_once 'db_connect.php';
+require_once '../config/database.php';
 header('Content-Type: application/json');
 
 if (!isset($_SESSION['user_id'])) {
@@ -110,7 +110,7 @@ function applyAction($conn, $actionType, $payload, $photoPath) {
             }
 
             // Logic Correction: Avoid setting 'horizontal' or upward branches as children
-            $horizontalRels = ['Parent', 'Uncle', 'Aunt'];
+            $horizontalRels = ['Parent', 'Uncle', 'Aunt', 'Brother-in-law', 'Sister-in-law'];
             $actualPid = in_array($p['relation_to_owner'], $horizontalRels) ? null : $pid;
 
             $stmt = $conn->prepare("INSERT INTO family_members (family_id, name, relation_to_owner, mobile_number, job_status, marital_status, nick_name, gender, dob_dod_type, dob_dod, education, job_details, spouse_name, date_of_marriage, in_laws_village, in_laws_father_name, others, blood_group, member_house_no, child_type, parent_member_id, spouse_member_id, photo_path) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
@@ -131,7 +131,8 @@ function applyAction($conn, $actionType, $payload, $photoPath) {
 
             // Logic Correction: If this person IS a parent of another member ($pid),
             // then $pid is the child, and we should NOT set it as the member's parent.
-            $actualPid = ($p['relation_to_owner'] === 'Parent') ? null : $pid;
+            $horizontalRels = ['Parent', 'Uncle', 'Aunt', 'Brother-in-law', 'Sister-in-law'];
+            $actualPid = in_array($p['relation_to_owner'], $horizontalRels) ? null : $pid;
 
             if ($livePhoto) {
                 $stmt = $conn->prepare("UPDATE family_members SET name=?, relation_to_owner=?, mobile_number=?, job_status=?, marital_status=?, nick_name=?, gender=?, dob_dod_type=?, dob_dod=?, education=?, job_details=?, spouse_name=?, date_of_marriage=?, in_laws_village=?, in_laws_father_name=?, others=?, blood_group=?, member_house_no=?, child_type=?, parent_member_id=?, spouse_member_id=?, photo_path=? WHERE id=?");
@@ -218,7 +219,7 @@ if ($action === 'get_families') {
             $sid = ($p['spouse_member_id'] ?? '') === '' ? null : $p['spouse_member_id'];
             
             // Logic Correction: Avoid setting 'horizontal' or upward branches as children
-            $horizontalRels = ['Parent', 'Uncle', 'Aunt'];
+            $horizontalRels = ['Parent', 'Uncle', 'Aunt', 'Brother-in-law', 'Sister-in-law'];
             $actualPid = in_array($p['relation_to_owner'], $horizontalRels) ? null : $pid;
 
             $stmt = $conn->prepare("INSERT INTO family_members (family_id, name, relation_to_owner, mobile_number, job_status, marital_status, nick_name, gender, dob_dod_type, dob_dod, education, job_details, spouse_name, date_of_marriage, in_laws_village, in_laws_father_name, others, blood_group, member_house_no, child_type, parent_member_id, spouse_member_id, photo_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");

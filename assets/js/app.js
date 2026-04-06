@@ -40,7 +40,7 @@ async function apiCall(action, data = {}) {
         options.headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
     }
     
-    const response = await fetch('api.php', options);
+    const response = await fetch('api/routes.php', options);
     return response.json();
 }
 
